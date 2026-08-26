@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Fantasy Premier League",
-        "description": "Enter your FPL manager ID. You can find it in the URL when you open the Points tab on fantasy.premierleague.com: `/entry/'{manager_id}'/event/1`.",
+        "description": "Enter your FPL manager ID. You can find it in the URL when you open the Points tab on fantasy.premierleague.com, for example `/entry/1234567/event/1`.",
         "data": {
           "manager_id": "Manager ID"
         },
