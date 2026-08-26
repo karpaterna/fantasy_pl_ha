@@ -2,6 +2,7 @@
 # and as the public repo; these stay local, because they carry LAN addresses,
 # review trails, personal detail and build-process notes that do not belong in
 # a released integration.
+CHANGELOG.md
 HANDOFF.md
 PLAN.md
 ARCHITECTURE.md
