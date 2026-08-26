@@ -1,0 +1,12 @@
+{
+  "domain": "fantasy_pl",
+  "name": "Fantasy Premier League",
+  "codeowners": ["@karpaterna"],
+  "config_flow": true,
+  "documentation": "https://github.com/karpaterna/fantasy_pl_ha",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/karpaterna/fantasy_pl_ha/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

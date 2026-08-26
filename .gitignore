@@ -1,0 +1,26 @@
+# Internal working documents. This folder doubles as a local working directory
+# and as the public repo; these stay local, because they carry LAN addresses,
+# review trails, personal detail and build-process notes that do not belong in
+# a released integration.
+HANDOFF.md
+PLAN.md
+ARCHITECTURE.md
+ARCHITECTURE-REVIEW.md
+CODE-REVIEW.md
+setup-repo.ps1
+
+__pycache__/
+*.py[cod]
+.venv/
+.vscode/
+.idea/
+.DS_Store
+config/
+
+# Tooling caches — created the first time pytest/ruff/coverage actually run.
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

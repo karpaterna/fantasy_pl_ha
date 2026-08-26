@@ -1,0 +1,16 @@
+{
+  "entity": {
+    "sensor": {
+      "overall_points": { "default": "mdi:counter" },
+      "overall_rank": { "default": "mdi:podium" },
+      "gameweek_points": { "default": "mdi:soccer" },
+      "gameweek_rank": { "default": "mdi:podium-gold" },
+      "team_value": { "default": "mdi:cash-multiple" },
+      "bank": { "default": "mdi:bank" },
+      "total_transfers": { "default": "mdi:swap-horizontal" },
+      "current_gameweek": { "default": "mdi:calendar-week" },
+      "next_deadline": { "default": "mdi:clock-alert-outline" },
+      "gameweek_average_score": { "default": "mdi:chart-bell-curve" }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+name: Feature request
+description: Suggest a sensor, service, or improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to see?
+    validations:
+      required: true
+  - type: input
+    id: endpoint
+    attributes:
+      label: Which FPL API endpoint would it use?
+      placeholder: "entry/{manager_id}/history/"

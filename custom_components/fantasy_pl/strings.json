@@ -1,0 +1,59 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Fantasy Premier League",
+        "description": "Enter your FPL manager ID. You can find it in the URL when you open the Points tab on fantasy.premierleague.com: `/entry/'{manager_id}'/event/1`.",
+        "data": {
+          "manager_id": "Manager ID"
+        },
+        "data_description": {
+          "manager_id": "The numeric ID of the FPL team to track. Public data only - no login required."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the Fantasy Premier League API.",
+      "manager_not_found": "No FPL team exists with that manager ID."
+    },
+    "abort": {
+      "already_configured": "This manager ID is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Polling options",
+        "data": {
+          "scan_interval_minutes": "Update interval"
+        },
+        "data_description": {
+          "scan_interval_minutes": "How often to poll the FPL API, in minutes. Scores update roughly every minute during matches, but the API is unofficial - be considerate."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "overall_points": { "name": "Overall points" },
+      "overall_rank": { "name": "Overall rank" },
+      "gameweek_points": { "name": "Gameweek points" },
+      "gameweek_rank": { "name": "Gameweek rank" },
+      "team_value": { "name": "Team value" },
+      "bank": { "name": "Bank" },
+      "total_transfers": { "name": "Total transfers" },
+      "current_gameweek": { "name": "Current gameweek" },
+      "next_deadline": { "name": "Next deadline" },
+      "gameweek_average_score": { "name": "Gameweek average score" },
+      "gameweek_state": {
+        "name": "Gameweek state",
+        "state": {
+          "scheduled": "Scheduled",
+          "in_progress": "In progress",
+          "provisional": "Provisional",
+          "final": "Final"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+# Test-only dependencies. Deliberately NOT in manifest.json requirements —
+# the integration itself has zero runtime dependencies.
+#
+# pytest-homeassistant-custom-component pins the Home Assistant version it
+# tests against; bump it to track the core release you want to support.
+pytest-homeassistant-custom-component==0.13.*
+
+# CI runs `pytest --cov=...`. phcc happens to pull pytest-cov in transitively
+# today, but a CI command must not depend on another package's dependency
+# graph, so it is declared here explicitly.
+pytest-cov>=5.0

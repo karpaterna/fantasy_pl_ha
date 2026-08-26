@@ -1,0 +1,19 @@
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "D", "RUF", "ISC"]
+ignore = [
+  "D203",   # incompatible with D211
+  "D213",   # incompatible with D212
+  "ISC001", # conflicts with the formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Fixtures and parametrised cases don't need the full docstring convention.
+"tests/*" = ["D100", "D103"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
