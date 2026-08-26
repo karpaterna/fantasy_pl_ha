@@ -3,6 +3,7 @@
 # review trails, personal detail and build-process notes that do not belong in
 # a released integration.
 CHANGELOG.md
+RELEASE-NOTES-*.md
 HANDOFF.md
 PLAN.md
 ARCHITECTURE.md
