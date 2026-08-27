@@ -24,4 +24,8 @@ One device per manager, with 11 sensors:
 
 Polling interval is configurable (5–360 minutes, default 30).
 
+Built with substantial AI assistance (Claude). Every change is human-reviewed,
+and CI runs hassfest, the HACS validator, ruff and the full test suite on every
+push. Issues and corrections are welcome.
+
 Not affiliated with the Premier League. The API is public but undocumented.

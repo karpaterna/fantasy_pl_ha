@@ -96,6 +96,14 @@ pytest
 ruff check . && ruff format --check .
 ```
 
+## AI disclosure
+
+This integration was written with substantial AI assistance (Claude), including
+the initial implementation, the test suite and two review passes. Every change
+is human-reviewed, and CI runs hassfest, the HACS validator, ruff and the full
+pytest suite on every push. Issues and corrections are welcome — if something
+here looks wrong, it may well be.
+
 ## Disclaimer
 
 Not affiliated with or endorsed by the Premier League or Fantasy Premier League.
