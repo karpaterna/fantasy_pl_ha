@@ -6,6 +6,7 @@ from datetime import timedelta
 
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import FplClient
@@ -15,7 +16,12 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
 )
-from .coordinator import FplConfigEntry, FplDataUpdateCoordinator, FplEventCache
+from .coordinator import (
+    FplConfigEntry,
+    FplDataUpdateCoordinator,
+    FplEventCache,
+    selected_league_ids,
+)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
@@ -37,6 +43,27 @@ def _shared_cache(hass: HomeAssistant) -> FplEventCache:
     return cache
 
 
+def _async_purge_deselected_leagues(
+    hass: HomeAssistant, entry: FplConfigEntry, manager_id: int
+) -> None:
+    """Drop league sensors for leagues the user has unticked.
+
+    Deselecting a league only stops the entity being created; without this the
+    old registry entry survives as a permanently unavailable sensor. Changing
+    the options reloads the entry, so this runs on every selection change.
+
+    Only ``{manager_id}_league_*`` unique_ids are considered — the eleven fixed
+    sensors use keys like ``overall_points`` and can never match the prefix.
+    """
+    prefix = f"{manager_id}_league_"
+    keep = {f"{prefix}{league_id}" for league_id in selected_league_ids(entry)}
+    registry = er.async_get(hass)
+    for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+        unique_id = reg_entry.unique_id
+        if unique_id.startswith(prefix) and unique_id not in keep:
+            registry.async_remove(reg_entry.entity_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: FplConfigEntry) -> bool:
     """Set up Fantasy Premier League from a config entry."""
     manager_id = int(entry.data[CONF_MANAGER_ID])
@@ -53,6 +80,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: FplConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = coordinator
+    # Before the platforms add entities, so a deselected league's sensor is
+    # gone rather than briefly re-registered.
+    _async_purge_deselected_leagues(hass, entry, manager_id)
     # Options changes reload the entry via OptionsFlowWithReload; no manual
     # update listener is needed.
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

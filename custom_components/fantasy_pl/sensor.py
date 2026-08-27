@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -17,7 +18,12 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.util import dt as dt_util
 
-from .coordinator import FplConfigEntry, FplData, FplDataUpdateCoordinator
+from .coordinator import (
+    FplConfigEntry,
+    FplData,
+    FplDataUpdateCoordinator,
+    selected_league_ids,
+)
 from .entity import FplEntity
 
 # The coordinator does all I/O; entities never talk to the API themselves.
@@ -76,6 +82,33 @@ def _gameweek_state(data: FplData) -> StateType:
     if deadline is not None and deadline > dt_util.utcnow():
         return GW_STATE_SCHEDULED
     return GW_STATE_IN_PROGRESS
+
+
+def _positive_int(value: object) -> int | None:
+    """Return ``value`` when it is a real int, else None.
+
+    ``bool`` is a subclass of ``int``, so it is excluded explicitly — the same
+    guard ``_entry_int`` uses.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _league_movement(league: dict[str, Any]) -> int | None:
+    """Return places gained since the last gameweek; positive means moved up.
+
+    FPL uses ``entry_last_rank == 0`` to mean "no previous rank" — a league
+    joined this gameweek, or gameweek 1 — not "finished zeroth". Treating it as
+    a real rank would report a movement of ``0 - entry_rank``, i.e. a plunge of
+    the entire league, on every manager's first gameweek. So 0 yields None,
+    which renders as "unknown" rather than as a number that looks meaningful.
+    """
+    rank = _positive_int(league.get("entry_rank"))
+    last = _positive_int(league.get("entry_last_rank"))
+    if rank is None or last is None or last == 0:
+        return None
+    return last - rank
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -172,7 +205,21 @@ async def async_setup_entry(
 ) -> None:
     """Set up the FPL sensors from a config entry."""
     coordinator = entry.runtime_data
-    async_add_entities(FplSensor(coordinator, description) for description in SENSORS)
+    entities: list[SensorEntity] = [
+        FplSensor(coordinator, description) for description in SENSORS
+    ]
+
+    # One entity per *selected* league, not per league currently in the
+    # payload: selection alone decides which entities exist, so leaving a
+    # league on the FPL site marks its sensor unavailable rather than making it
+    # vanish. Names come from the payload when it has them.
+    data = coordinator.data
+    for league_id in selected_league_ids(entry):
+        league = data.league_by_id(league_id) if data else None
+        name = (league or {}).get("name") or f"League {league_id}"
+        entities.append(FplLeagueSensor(coordinator, league_id, name))
+
+    async_add_entities(entities)
 
 
 class FplSensor(FplEntity, SensorEntity):
@@ -195,3 +242,71 @@ class FplSensor(FplEntity, SensorEntity):
         if self.coordinator.data is None:
             return None
         return self.entity_description.value_fn(self.coordinator.data)
+
+
+class FplLeagueSensor(FplEntity, SensorEntity):
+    """The manager's rank in one classic mini-league.
+
+    Built from the ``leagues.classic[]`` array that already arrives with every
+    ``entry/{id}/`` poll, so a league sensor adds no HTTP request of its own.
+
+    The name is not a ``translation_key``: it is the league's own name, which
+    comes from the API and cannot be translated. It is read once, when the
+    entity is added — renaming a league on the FPL site is picked up on the
+    next reload of the config entry, the same way the device name works.
+    """
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:trophy-outline"
+
+    def __init__(
+        self,
+        coordinator: FplDataUpdateCoordinator,
+        league_id: int,
+        league_name: str,
+    ) -> None:
+        """Initialise the sensor for one league."""
+        super().__init__(coordinator, f"league_{league_id}")
+        self._league_id = league_id
+        self._attr_name = f"{league_name} rank"
+
+    @property
+    def _league(self) -> dict[str, Any] | None:
+        """Return this league's slice of the current snapshot."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.league_by_id(self._league_id)
+
+    @property
+    def available(self) -> bool:
+        """Report unavailable when the manager is no longer in this league.
+
+        The league simply stops appearing in the payload; that is a real
+        "no value" rather than a zero, so the entity goes unavailable instead
+        of publishing a misleading rank.
+        """
+        return super().available and self._league is not None
+
+    @property
+    def native_value(self) -> StateType:
+        """Return the manager's rank in this league."""
+        league = self._league
+        if league is None:
+            return None
+        return _positive_int(league.get("entry_rank"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return the league context that does not deserve its own entity."""
+        league = self._league
+        if league is None:
+            return None
+        return {
+            "league_id": self._league_id,
+            "league_name": league.get("name"),
+            "entries": _positive_int(league.get("rank_count")),
+            "previous_rank": _positive_int(league.get("entry_last_rank")) or None,
+            "movement": _league_movement(league),
+            "percentile": _positive_int(league.get("entry_percentile_rank")),
+            "is_admin": league.get("entry_can_admin"),
+        }

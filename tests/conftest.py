@@ -44,6 +44,58 @@ def entry_payload() -> dict[str, Any]:
 
 
 @pytest.fixture
+def leagues_payload() -> list[dict[str, Any]]:
+    """Return a `leagues.classic[]` array: two invitational, one automatic.
+
+    Field names and the `entry_last_rank == 0` convention mirror the real API.
+    """
+    return [
+        {
+            "id": 14,
+            "name": "Automatic League",
+            "league_type": "s",
+            "scoring": "c",
+            "entry_rank": 842731,
+            "entry_last_rank": 840112,
+            "rank_count": 1089086,
+            "entry_percentile_rank": 80,
+            "entry_can_admin": False,
+        },
+        {
+            "id": 555001,
+            "name": "Work League",
+            "league_type": "x",
+            "scoring": "c",
+            "entry_rank": 4,
+            "entry_last_rank": 7,
+            "rank_count": 21,
+            "entry_percentile_rank": 20,
+            "entry_can_admin": True,
+        },
+        {
+            "id": 555002,
+            "name": "Friends League",
+            "league_type": "x",
+            "scoring": "c",
+            "entry_rank": 2,
+            # 0 means "no previous rank" (joined this gameweek), not "zeroth".
+            "entry_last_rank": 0,
+            "rank_count": 8,
+            "entry_percentile_rank": 25,
+            "entry_can_admin": False,
+        },
+    ]
+
+
+@pytest.fixture
+def entry_payload_with_leagues(
+    entry_payload: dict[str, Any], leagues_payload: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Return the manager summary with its classic leagues attached."""
+    return {**entry_payload, "leagues": {"classic": leagues_payload, "h2h": []}}
+
+
+@pytest.fixture
 def events_payload() -> list[dict[str, Any]]:
     """Return a trimmed, already-pruned `bootstrap-static/` event list."""
     return [

@@ -29,6 +29,25 @@ One manager creates one device with 11 sensors:
 Money sensors carry no unit deliberately — `£` would imply pounds rather than
 millions, and `m` is Home Assistant's symbol for metres.
 
+### Mini-league sensors
+
+Optionally, one extra sensor per classic league you pick, showing your rank in
+it:
+
+| Entity | Example | Attributes |
+| --- | --- | --- |
+| `<League name> rank` | `4` | `league_id`, `league_name`, `entries`, `previous_rank`, `movement`, `percentile`, `is_admin` |
+
+`movement` is places gained since the last gameweek — positive means you moved
+up. It is unknown rather than a number when there is no previous rank to
+compare against, which is the case in gameweek 1 and in any league you joined
+this week.
+
+**These cost no extra API calls.** Your rank in every classic league already
+arrives inside the manager summary that is polled each cycle, so tracking ten
+leagues is exactly as cheap as tracking none. If you leave a league, its sensor
+goes unavailable rather than reporting a stale rank.
+
 **Update timing.** Points and ranks are polled every cycle (30 min by default).
 Gameweek state, average score and next deadline come from a large cached
 document, refreshed every 15 minutes during a live gameweek and every 6 hours
@@ -54,6 +73,11 @@ You need your manager ID — the number in the URL of your Points tab:
 https://fantasy.premierleague.com/entry/1234567/event/1
                                         ^^^^^^^
 ```
+
+Setup then offers your classic leagues, with the invitational ones pre-selected
+— FPL's automatic leagues (Overall, your club, your region) are listed but left
+unticked. Change the selection any time under **Configure**; unticking a league
+removes its sensor and its history.
 
 Add the integration once per team. **Update interval** is configurable
 (5–360 minutes, default 30); the large document is capped at 6 hours regardless.

@@ -19,6 +19,7 @@ from .const import (
     BOOTSTRAP_LIVE_MAX_AGE,
     BOOTSTRAP_MAX_AGE,
     BOOTSTRAP_RETRY_COOLDOWN,
+    CONF_LEAGUES,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     GAMEWEEK_LIVE_WINDOW,
@@ -27,6 +28,29 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 FplConfigEntry = ConfigEntry["FplDataUpdateCoordinator"]
+
+
+def selected_league_ids(entry: FplConfigEntry) -> list[int]:
+    """Return the league IDs the user picked, de-duplicated, in stored order.
+
+    They are stored as strings because a ``SelectSelector`` round-trips its
+    option values as strings; they are parsed back to ``int`` here so callers
+    can compare them against the API's numeric ids without each doing its own
+    conversion. Unparseable values are skipped rather than raising — options
+    can be hand-edited, and one bad entry should not break setup.
+    """
+    raw = entry.options.get(CONF_LEAGUES)
+    if not isinstance(raw, list):
+        return []
+    ids: list[int] = []
+    for value in raw:
+        try:
+            league_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if league_id not in ids:
+            ids.append(league_id)
+    return ids
 
 
 def gameweek_is_live(events: list[dict[str, Any]], now: datetime) -> bool:
@@ -55,12 +79,64 @@ def gameweek_is_live(events: list[dict[str, Any]], now: datetime) -> bool:
     return False
 
 
+def classic_leagues(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the classic leagues carried by an ``entry/{id}/`` payload.
+
+    The manager summary already lists every classic league the manager is in,
+    together with their rank in it (``entry_rank``), the previous gameweek's
+    rank (``entry_last_rank``) and the league size (``rank_count``). League
+    sensors are built from this, so they cost no extra HTTP request —
+    ``leagues-classic/{id}/standings/`` is only needed for the table of *other*
+    managers, which is deliberately out of scope here.
+
+    Defensive at every level: the API is unofficial, so a missing or
+    wrong-typed key yields an empty list rather than an exception. Entries
+    without an ``id`` are dropped because the id is the sensor's identity.
+
+    A module-level function rather than only an ``FplData`` property: the
+    config flow needs the same extraction from a raw payload, before any
+    ``FplData`` exists.
+    """
+    leagues = entry.get("leagues")
+    if not isinstance(leagues, dict):
+        return []
+    classic = leagues.get("classic")
+    if not isinstance(classic, list):
+        return []
+    return [
+        league
+        for league in classic
+        # `bool` is a subclass of `int`, so it is excluded explicitly —
+        # otherwise an id of True would pass and produce the unique_id
+        # "…_league_True".
+        if isinstance(league, dict)
+        and isinstance(league.get("id"), int)
+        and not isinstance(league.get("id"), bool)
+    ]
+
+
 @dataclass(slots=True)
 class FplData:
     """Everything the entities need, in one immutable-ish snapshot."""
 
     entry: dict[str, Any] = field(default_factory=dict)
     events: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def classic_leagues(self) -> list[dict[str, Any]]:
+        """Return the manager's classic leagues from the current snapshot."""
+        return classic_leagues(self.entry)
+
+    def league_by_id(self, league_id: int) -> dict[str, Any] | None:
+        """Return one classic league, or None if the manager is not in it."""
+        return next(
+            (
+                league
+                for league in self.classic_leagues
+                if league.get("id") == league_id
+            ),
+            None,
+        )
 
     def event_by_flag(self, flag: str) -> dict[str, Any] | None:
         """Return the event marked with ``flag`` (is_current/is_next/...)."""

@@ -8,6 +8,14 @@ from typing import Final
 DOMAIN: Final = "fantasy_pl"
 
 CONF_MANAGER_ID: Final = "manager_id"
+CONF_LEAGUES: Final = "leagues"
+
+# FPL classifies a classic league by how it was created: "x" is an invitational
+# league someone made and shared a code for (a mini-league), "s" is one FPL
+# generates for everyone — Overall, your club, your region, your country. Only
+# the invitational ones are interesting by default; the rest have millions of
+# entries and are the same for every manager.
+LEAGUE_TYPE_INVITATIONAL: Final = "x"
 
 DEFAULT_SCAN_INTERVAL: Final = timedelta(minutes=30)
 MIN_SCAN_INTERVAL_MINUTES: Final = 5

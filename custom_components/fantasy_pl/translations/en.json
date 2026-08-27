@@ -10,6 +10,16 @@
         "data_description": {
           "manager_id": "The numeric ID of the FPL team to track. Public data only - no login required."
         }
+      },
+      "leagues": {
+        "title": "Mini-leagues",
+        "description": "Pick the classic leagues you want a rank sensor for. Your invitational leagues are pre-selected; the rest are the leagues FPL enters everyone into automatically.",
+        "data": {
+          "leagues": "Leagues"
+        },
+        "data_description": {
+          "leagues": "One sensor per league, showing your rank in it. This costs no extra API calls - the data already arrives with every update. You can change the selection later in the integration options."
+        }
       }
     },
     "error": {
@@ -23,12 +33,14 @@
   "options": {
     "step": {
       "init": {
-        "title": "Polling options",
+        "title": "Options",
         "data": {
-          "scan_interval_minutes": "Update interval"
+          "scan_interval_minutes": "Update interval",
+          "leagues": "Leagues"
         },
         "data_description": {
-          "scan_interval_minutes": "How often to poll the FPL API, in minutes. Scores update roughly every minute during matches, but the API is unofficial - be considerate."
+          "scan_interval_minutes": "How often to poll the FPL API, in minutes. Scores update roughly every minute during matches, but the API is unofficial - be considerate.",
+          "leagues": "Which classic leagues get a rank sensor. Unticking a league removes its sensor and its history."
         }
       }
     }
