@@ -440,3 +440,40 @@ async def test_deselecting_a_league_removes_only_its_entity(
     assert registry.async_get("sensor.example_team_friends_league_rank") is not None
     # The eleven fixed sensors share the device, not the league prefix.
     assert registry.async_get("sensor.example_team_overall_points") is not None
+
+
+async def test_options_flow_offers_the_picker_when_leagues_are_known(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    entry_payload_with_leagues: dict[str, Any],
+) -> None:
+    """The picker is built from the last payload, pre-ticked to the choice.
+
+    The counterpart to the test above: there the payload had no leagues and
+    the field was omitted, here it has them and the field must appear with the
+    stored selection as its default, or reopening the dialog would silently
+    present an empty selection as the current one.
+    """
+    mock_client.async_get_entry.return_value = entry_payload_with_leagues
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Example Team",
+        data={CONF_MANAGER_ID: MANAGER_ID},
+        options={CONF_LEAGUES: ["555001"], CONF_SCAN_INTERVAL_MINUTES: 30},
+        unique_id=str(MANAGER_ID),
+    )
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    key = next(k for k in result["data_schema"].schema if k == CONF_LEAGUES)
+    assert key.default() == ["555001"]
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_SCAN_INTERVAL_MINUTES: 30, CONF_LEAGUES: ["555001", "555002"]},
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_LEAGUES] == ["555001", "555002"]

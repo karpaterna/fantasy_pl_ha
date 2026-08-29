@@ -14,11 +14,16 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.fantasy_pl.api import FplConnectionError, FplRateLimitedError
+from custom_components.fantasy_pl.api import (
+    FplConnectionError,
+    FplManagerNotFound,
+    FplRateLimitedError,
+)
 from custom_components.fantasy_pl.const import (
     BOOTSTRAP_LIVE_MAX_AGE,
     BOOTSTRAP_MAX_AGE,
@@ -346,3 +351,41 @@ async def test_a_successful_fetch_clears_the_rate_limit_cooldown() -> None:
 
     assert cache.failed_at is None
     assert cache.retry_after == BOOTSTRAP_RETRY_COOLDOWN
+
+
+async def test_a_404_on_the_manager_is_retryable_not_fatal(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry
+) -> None:
+    """FPL 404s during maintenance, so this must not read as a dead entry.
+
+    The update fails and the sensors go unavailable, but the config entry
+    stays set up and the next cycle retries.
+    """
+    await setup_entry(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data
+
+    mock_client.async_get_entry.side_effect = FplManagerNotFound("no such manager")
+    await coordinator.async_refresh()
+
+    assert coordinator.last_update_success is False
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+
+
+async def test_a_bootstrap_failure_with_nothing_cached_fails_the_update(
+    hass: HomeAssistant, mock_client: AsyncMock, mock_config_entry
+) -> None:
+    """Without a previous cycle's cache there is no degraded mode.
+
+    Three sensors would have no source at all, so the update fails rather
+    than publishing a snapshot with an empty event list.
+    """
+    await setup_entry(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data
+
+    coordinator.cache.events = []
+    coordinator.cache.fetched = None
+    coordinator.cache.failed_at = None
+    mock_client.async_get_events.side_effect = FplConnectionError("FPL is down")
+    await coordinator.async_refresh()
+
+    assert coordinator.last_update_success is False

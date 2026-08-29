@@ -31,6 +31,7 @@ from custom_components.fantasy_pl.sensor import (
     _entry_int,
     _event_average_score,
     _gameweek_state,
+    _next_deadline,
     _tenths,
 )
 
@@ -96,6 +97,11 @@ def test_gameweek_state(event: dict[str, Any], expected: str) -> None:
 def test_gameweek_state_without_an_event() -> None:
     """No current gameweek means no state, not a crash."""
     assert _gameweek_state(FplData()) is None
+
+
+def test_next_deadline_without_an_upcoming_gameweek() -> None:
+    """After the season's last gameweek nothing is flagged is_next."""
+    assert _next_deadline(FplData()) is None
 
 
 @pytest.mark.parametrize(
