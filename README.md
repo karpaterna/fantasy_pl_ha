@@ -12,19 +12,19 @@ FPL API — no login, no cookies, no credentials stored.
 
 One manager creates one device with 11 sensors:
 
-| Entity | Example | Notes |
-| --- | --- | --- |
-| Overall points | `1247 pts` | `state_class: total_increasing` |
-| Overall rank | `2229871` | lower is better |
-| Gameweek points | `56 pts` | current gameweek only |
-| Gameweek rank | `1693842` | |
-| Team value | `100.4` | millions of pounds (`100.4` = £100.4m) |
-| Bank | `0.5` | millions of pounds |
-| Total transfers | `12` | season total at the last deadline |
-| Current gameweek | `1` | |
-| Next deadline | `2026-08-29T17:30:00+00:00` | `device_class: timestamp` |
-| Gameweek average score | `45 pts` | all managers |
-| Gameweek state | `in_progress` | `scheduled` / `in_progress` / `provisional` / `final` |
+| Entity | Example |
+| --- | --- |
+| Overall points | `1247 pts` |
+| Overall rank | `2229871` |
+| Gameweek points | `56 pts` |
+| Gameweek rank | `1693842` |
+| Team value | `100.4` |
+| Bank | `0.5` |
+| Total transfers | `12` |
+| Current gameweek | `1` |
+| Next deadline | `2026-08-29T17:30:00+00:00` |
+| Gameweek average score | `45 pts` |
+| Gameweek state | `scheduled` / `in_progress` / `provisional` / `final` |
 
 Money sensors carry no unit deliberately — `£` would imply pounds rather than
 millions, and `m` is Home Assistant's symbol for metres.
