@@ -14,6 +14,7 @@ import pytest
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.fantasy_pl.config_flow import (
@@ -336,3 +337,143 @@ async def test_options_flow_preserves_keys_absent_from_the_form(
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options[CONF_SCAN_INTERVAL_MINUTES] == 60
     assert entry.options[CONF_LEAGUES] == ["555001"]
+
+
+async def test_league_rename_follows_without_a_reload(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    entry_payload_with_leagues: dict[str, Any],
+    leagues_payload: list[dict[str, Any]],
+) -> None:
+    """A league renamed on the FPL site must not need a config-entry reload.
+
+    The unique_id is keyed to the league id, so the label moves while the
+    entity — and everything the recorder has stored under it — stays put.
+    """
+    mock_client.async_get_entry.return_value = entry_payload_with_leagues
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Example Team",
+        data={CONF_MANAGER_ID: MANAGER_ID},
+        options={CONF_LEAGUES: ["555001"]},
+        unique_id=str(MANAGER_ID),
+    )
+    await setup_entry(hass, entry)
+
+    entity_id = "sensor.example_team_work_league_rank"
+    registry = er.async_get(hass)
+    unique_id = registry.async_get(entity_id).unique_id
+    friendly_name = hass.states.get(entity_id).attributes["friendly_name"]
+    assert friendly_name.endswith("Work League rank")
+
+    renamed = [{**league} for league in leagues_payload]
+    renamed[1]["name"] = "Monday Club"
+    mock_client.async_get_entry.return_value = {
+        **entry_payload_with_leagues,
+        "leagues": {"classic": renamed, "h2h": []},
+    }
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+
+    state = hass.states.get(entity_id)
+    assert state.attributes["friendly_name"].endswith("Monday Club rank")
+    assert state.attributes["league_name"] == "Monday Club"
+    assert registry.async_get(entity_id).unique_id == unique_id
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(True, True), (False, False), ("true", None), (1, None), (None, None)],
+    ids=["true", "false", "string", "int", "missing"],
+)
+async def test_is_admin_is_a_bool_or_nothing(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    entry_payload_with_leagues: dict[str, Any],
+    leagues_payload: list[dict[str, Any]],
+    value: Any,
+    expected: bool | None,
+) -> None:
+    """A template reading this attribute must never see "false" or 0."""
+    leagues = [{**league} for league in leagues_payload]
+    leagues[1]["entry_can_admin"] = value
+    mock_client.async_get_entry.return_value = {
+        **entry_payload_with_leagues,
+        "leagues": {"classic": leagues, "h2h": []},
+    }
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Example Team",
+        data={CONF_MANAGER_ID: MANAGER_ID},
+        options={CONF_LEAGUES: ["555001"]},
+        unique_id=str(MANAGER_ID),
+    )
+    await setup_entry(hass, entry)
+
+    state = hass.states.get("sensor.example_team_work_league_rank")
+    assert state.attributes["is_admin"] is expected
+
+
+async def test_deselecting_a_league_removes_only_its_entity(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    entry_payload_with_leagues: dict[str, Any],
+) -> None:
+    """Deselection must not leave a permanently unavailable sensor behind."""
+    mock_client.async_get_entry.return_value = entry_payload_with_leagues
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Example Team",
+        data={CONF_MANAGER_ID: MANAGER_ID},
+        options={CONF_LEAGUES: ["555001", "555002"]},
+        unique_id=str(MANAGER_ID),
+    )
+    await setup_entry(hass, entry)
+    registry = er.async_get(hass)
+    assert registry.async_get("sensor.example_team_work_league_rank") is not None
+
+    hass.config_entries.async_update_entry(entry, options={CONF_LEAGUES: ["555002"]})
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert registry.async_get("sensor.example_team_work_league_rank") is None
+    assert registry.async_get("sensor.example_team_friends_league_rank") is not None
+    # The eleven fixed sensors share the device, not the league prefix.
+    assert registry.async_get("sensor.example_team_overall_points") is not None
+
+
+async def test_options_flow_offers_the_picker_when_leagues_are_known(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    entry_payload_with_leagues: dict[str, Any],
+) -> None:
+    """The picker is built from the last payload, pre-ticked to the choice.
+
+    The counterpart to the test above: there the payload had no leagues and
+    the field was omitted, here it has them and the field must appear with the
+    stored selection as its default, or reopening the dialog would silently
+    present an empty selection as the current one.
+    """
+    mock_client.async_get_entry.return_value = entry_payload_with_leagues
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Example Team",
+        data={CONF_MANAGER_ID: MANAGER_ID},
+        options={CONF_LEAGUES: ["555001"], CONF_SCAN_INTERVAL_MINUTES: 30},
+        unique_id=str(MANAGER_ID),
+    )
+    await setup_entry(hass, entry)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    key = next(k for k in result["data_schema"].schema if k == CONF_LEAGUES)
+    assert key.default() == ["555001"]
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_SCAN_INTERVAL_MINUTES: 30, CONF_LEAGUES: ["555001", "555002"]},
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_LEAGUES] == ["555001", "555002"]

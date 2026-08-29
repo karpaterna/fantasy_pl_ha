@@ -46,4 +46,9 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: pip install -r requirements-test.txt
-      - run: pytest --cov=custom_components.fantasy_pl --cov-report=term-missing
+      # The floor is set just under the measured figure, not at an aspirational
+      # one: it exists to catch a new code path arriving with no test, and a
+      # threshold nobody can meet gets raised rather than obeyed.
+      - run: >-
+          pytest --cov=custom_components.fantasy_pl --cov-report=term-missing
+          --cov-fail-under=97

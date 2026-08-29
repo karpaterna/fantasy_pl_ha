@@ -53,12 +53,7 @@ def _tenths(value: object) -> float | None:
 
 def _entry_int(data: FplData, key: str) -> StateType:
     """Read an integer field from the manager summary."""
-    value = data.entry.get(key)
-    # bool is a subclass of int, so isinstance(True, int) is True. Without the
-    # second check a boolean field would be published as the state 1 or 0.
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value
+    return _positive_int(data.entry.get(key))
 
 
 def _next_deadline(data: FplData) -> datetime | None:
@@ -87,12 +82,25 @@ def _gameweek_state(data: FplData) -> StateType:
 def _positive_int(value: object) -> int | None:
     """Return ``value`` when it is a real int, else None.
 
-    ``bool`` is a subclass of ``int``, so it is excluded explicitly — the same
-    guard ``_entry_int`` uses.
+    ``bool`` is a subclass of ``int``, so a boolean is excluded explicitly —
+    otherwise True would publish as the state 1.
     """
     if isinstance(value, bool) or not isinstance(value, int):
         return None
     return value
+
+
+def _event_average_score(data: FplData) -> StateType:
+    """Read the current gameweek's average score off the event list.
+
+    Goes through the same guard as every other numeric sensor: the value comes
+    from bootstrap-static, so a malformed payload must not reach a sensor that
+    declares a numeric state class.
+    """
+    event = data.current_event
+    if event is None:
+        return None
+    return _positive_int(event.get("average_entry_score"))
 
 
 def _league_movement(league: dict[str, Any]) -> int | None:
@@ -123,7 +131,12 @@ SENSORS: tuple[FplSensorEntityDescription, ...] = (
         key="overall_points",
         translation_key="overall_points",
         native_unit_of_measurement=POINTS,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        # TOTAL, not TOTAL_INCREASING: the season total can fall. A -4 transfer
+        # hit is applied the moment the gameweek starts, and bonus or
+        # dubious-goal corrections can revise a score down afterwards.
+        # TOTAL_INCREASING would read each of those as a counter reset and add
+        # the whole running total to long-term statistics again.
+        state_class=SensorStateClass.TOTAL,
         value_fn=lambda data: _entry_int(data, "summary_overall_points"),
     ),
     FplSensorEntityDescription(
@@ -181,7 +194,7 @@ SENSORS: tuple[FplSensorEntityDescription, ...] = (
         translation_key="gameweek_average_score",
         native_unit_of_measurement=POINTS,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: (data.current_event or {}).get("average_entry_score"),
+        value_fn=_event_average_score,
     ),
     FplSensorEntityDescription(
         key="gameweek_state",
@@ -251,9 +264,11 @@ class FplLeagueSensor(FplEntity, SensorEntity):
     ``entry/{id}/`` poll, so a league sensor adds no HTTP request of its own.
 
     The name is not a ``translation_key``: it is the league's own name, which
-    comes from the API and cannot be translated. It is read once, when the
-    entity is added — renaming a league on the FPL site is picked up on the
-    next reload of the config entry, the same way the device name works.
+    comes from the API and cannot be translated. It is read from the current
+    snapshot on every state write, so renaming a league on the FPL site is
+    picked up on the next poll. The ``unique_id`` stays keyed to the league id,
+    so a rename moves the label without touching the entity's identity or its
+    recorded history.
     """
 
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -268,7 +283,16 @@ class FplLeagueSensor(FplEntity, SensorEntity):
         """Initialise the sensor for one league."""
         super().__init__(coordinator, f"league_{league_id}")
         self._league_id = league_id
-        self._attr_name = f"{league_name} rank"
+        self._fallback_name = league_name
+
+    @property
+    def name(self) -> str:
+        """Return the league's current name, following a rename on the site."""
+        league = self._league
+        name = league.get("name") if league else None
+        if not isinstance(name, str) or not name:
+            name = self._fallback_name
+        return f"{name} rank"
 
     @property
     def _league(self) -> dict[str, Any] | None:
@@ -301,6 +325,9 @@ class FplLeagueSensor(FplEntity, SensorEntity):
         league = self._league
         if league is None:
             return None
+        # Guarded like the numeric fields: the API is unofficial, and an
+        # attribute of "false" or 0 would read as a real answer in a template.
+        is_admin = league.get("entry_can_admin")
         return {
             "league_id": self._league_id,
             "league_name": league.get("name"),
@@ -308,5 +335,5 @@ class FplLeagueSensor(FplEntity, SensorEntity):
             "previous_rank": _positive_int(league.get("entry_last_rank")) or None,
             "movement": _league_movement(league),
             "percentile": _positive_int(league.get("entry_percentile_rank")),
-            "is_admin": league.get("entry_can_admin"),
+            "is_admin": is_admin if isinstance(is_admin, bool) else None,
         }

@@ -46,6 +46,16 @@ GAMEWEEK_LIVE_WINDOW: Final = timedelta(days=5)
 # worst-case staleness of the live-gameweek sensors.
 BOOTSTRAP_RETRY_COOLDOWN: Final = timedelta(minutes=10)
 
+# A 429 is FPL asking for less traffic, so it earns a longer cooldown than an
+# ordinary failure. Only the ~3 MB endpoint gets one: entry/ is ~4 KB and the
+# scan interval already floors it at 5 minutes.
+#
+# This one deliberately breaks the "stay under BOOTSTRAP_LIVE_MAX_AGE" rule
+# above: during a live gameweek the three event-derived sensors can sit 30 min
+# stale rather than 15. Backing off is the point — being rate-limited again
+# would cost more than the extra staleness.
+BOOTSTRAP_RATE_LIMIT_COOLDOWN: Final = timedelta(minutes=30)
+
 MANUFACTURER: Final = "Premier League"
 MODEL: Final = "FPL Manager"
 
