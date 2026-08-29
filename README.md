@@ -106,8 +106,9 @@ logger:
 ```
 
 Attach a diagnostics download to any issue: **Settings → Devices & Services →
-Fantasy Premier League → ⋮ → Download diagnostics**. Player name and region are
-redacted automatically.
+Fantasy Premier League → ⋮ → Download diagnostics**. Your name, region, leagues
+and manager ID are all redacted automatically — the ID included, because the FPL
+site shows your real name at `/entry/{id}/`.
 
 ## Contributing
 
