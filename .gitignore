@@ -10,6 +10,9 @@ ARCHITECTURE.md
 ARCHITECTURE-REVIEW.md
 CODE-REVIEW.md
 setup-repo.ps1
+# Externally-produced review/remediation plans. Same category as the above:
+# internal working notes, and the filenames themselves are not for publication.
+*remediation*.md
 
 __pycache__/
 *.py[cod]
