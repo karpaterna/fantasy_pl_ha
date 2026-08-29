@@ -32,12 +32,8 @@ class FplEntity(CoordinatorEntity[FplDataUpdateCoordinator]):
             # Deliberately NOT /event/{n}: DeviceInfo is read only when the
             # entity is *added*, so a gameweek-scoped URL would pin itself to
             # whatever gameweek was current at setup and rot from there.
-            # /history is stable for the whole season.
-            #
-            # `name` has the same snapshot problem, which is why a later team
-            # rename is pushed to the device registry from
-            # FplDataUpdateCoordinator._async_update_device_name rather than
-            # from here.
+            # /history is stable for the whole season. `name` has the same
+            # snapshot problem, and is refreshed from the coordinator instead.
             configuration_url=(
                 f"https://fantasy.premierleague.com/entry/{manager_id}/history"
             ),

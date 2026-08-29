@@ -8,6 +8,7 @@ regress silently, and it should be cheap to test.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -17,10 +18,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.fantasy_pl.api import FplConnectionError
+from custom_components.fantasy_pl.api import FplConnectionError, FplRateLimitedError
 from custom_components.fantasy_pl.const import (
     BOOTSTRAP_LIVE_MAX_AGE,
     BOOTSTRAP_MAX_AGE,
+    BOOTSTRAP_RATE_LIMIT_COOLDOWN,
+    BOOTSTRAP_RETRY_COOLDOWN,
     CONF_MANAGER_ID,
     DOMAIN,
 )
@@ -191,8 +194,8 @@ async def test_bootstrap_failure_does_not_fail_the_update(
 ) -> None:
     """8 of 11 sensors read only from entry/, so they must survive.
 
-    Regression test for the review's #3: before the split, one bootstrap-static
-    failure failed the whole update and took every sensor unavailable with it.
+    The two fetches are deliberately not gathered: a bootstrap-static failure
+    must not fail the whole update and take every sensor unavailable with it.
     """
     await setup_entry(hass, mock_config_entry)
     coordinator = mock_config_entry.runtime_data
@@ -251,3 +254,95 @@ async def test_team_rename_reaches_the_device_registry(
             identifiers={(DOMAIN, "1234567")},
             name="Renamed FC",
         )
+
+
+async def test_concurrent_callers_share_one_download() -> None:
+    """The lock is what stops N config entries pulling N copies of ~3 MB.
+
+    Five callers all see an empty (therefore stale) cache at the same moment.
+    Without the lock and the re-check that follows it, every one of them would
+    start its own fetch; with them, four wait and then read the fresh cache.
+    """
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _slow_fetch() -> list[dict[str, Any]]:
+        started.set()
+        await release.wait()
+        return [_gw(NEVER_LIVE)]
+
+    client = AsyncMock()
+    client.async_get_events.side_effect = _slow_fetch
+    cache = FplEventCache()
+
+    callers = [asyncio.create_task(cache.async_get_events(client)) for _ in range(5)]
+    # One caller is now inside the fetch and the other four are on the lock.
+    await started.wait()
+    release.set()
+    results = await asyncio.gather(*callers)
+
+    assert client.async_get_events.await_count == 1
+    assert all(result == results[0] for result in results)
+
+
+async def test_failure_cooldown_starts_at_the_failure_not_the_request() -> None:
+    """A request may run for the full 30 s timeout before it fails.
+
+    Stamping the cooldown with the time the request *started* would hand that
+    time back, shortening the quiet period by however slow FPL was being.
+    """
+    client = AsyncMock()
+    client.async_get_events.side_effect = FplConnectionError("FPL is down")
+    cache = FplEventCache()
+    cache.events = [_gw(NEVER_LIVE)]
+    cache.fetched = NOW - BOOTSTRAP_MAX_AGE
+    failed_at = NOW + timedelta(seconds=30)
+
+    with (
+        patch(
+            "custom_components.fantasy_pl.coordinator.dt_util.utcnow",
+            side_effect=[NOW, failed_at],
+        ),
+        pytest.raises(FplConnectionError),
+    ):
+        await cache.async_get_events(client)
+
+    assert cache.failed_at == failed_at
+
+
+async def test_rate_limiting_earns_a_longer_cooldown() -> None:
+    """A 429 is FPL asking for less traffic, so back off further than usual."""
+    client = AsyncMock()
+    client.async_get_events.side_effect = FplRateLimitedError("429")
+    cache = FplEventCache()
+    cache.events = [_gw(NEVER_LIVE)]
+    cache.fetched = NOW - BOOTSTRAP_MAX_AGE
+
+    with (
+        patch(
+            "custom_components.fantasy_pl.coordinator.dt_util.utcnow",
+            return_value=NOW,
+        ),
+        pytest.raises(FplRateLimitedError),
+    ):
+        await cache.async_get_events(client)
+
+    assert cache.retry_after == BOOTSTRAP_RATE_LIMIT_COOLDOWN
+    # Still quiet at the point an ordinary failure would already have retried.
+    ordinary_retry = NOW + BOOTSTRAP_RETRY_COOLDOWN + timedelta(minutes=1)
+    assert cache.is_stale(ordinary_retry) is False
+    assert cache.is_stale(NOW + BOOTSTRAP_RATE_LIMIT_COOLDOWN) is True
+
+
+async def test_a_successful_fetch_clears_the_rate_limit_cooldown() -> None:
+    """The longer cooldown must not outlive the rate limiting that caused it."""
+    client = AsyncMock()
+    client.async_get_events.return_value = [_gw(NEVER_LIVE)]
+    cache = FplEventCache()
+    cache.retry_after = BOOTSTRAP_RATE_LIMIT_COOLDOWN
+    cache.failed_at = NOW
+
+    await cache.async_get_events(client)
+
+    assert cache.failed_at is None
+    assert cache.retry_after == BOOTSTRAP_RETRY_COOLDOWN

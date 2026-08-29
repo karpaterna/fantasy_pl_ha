@@ -14,10 +14,17 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .api import FplClient, FplConnectionError, FplError, FplManagerNotFound
+from .api import (
+    FplClient,
+    FplConnectionError,
+    FplError,
+    FplManagerNotFound,
+    FplRateLimitedError,
+)
 from .const import (
     BOOTSTRAP_LIVE_MAX_AGE,
     BOOTSTRAP_MAX_AGE,
+    BOOTSTRAP_RATE_LIMIT_COOLDOWN,
     BOOTSTRAP_RETRY_COOLDOWN,
     CONF_LEAGUES,
     DEFAULT_SCAN_INTERVAL,
@@ -106,8 +113,7 @@ def classic_leagues(entry: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         league
         for league in classic
-        # `bool` is a subclass of `int`, so it is excluded explicitly —
-        # otherwise an id of True would pass and produce the unique_id
+        # `bool` is excluded, or an id of True would produce the unique_id
         # "…_league_True".
         if isinstance(league, dict)
         and isinstance(league.get("id"), int)
@@ -172,6 +178,7 @@ class FplEventCache:
         self.events: list[dict[str, Any]] = []
         self.fetched: datetime | None = None
         self.failed_at: datetime | None = None
+        self.retry_after: timedelta = BOOTSTRAP_RETRY_COOLDOWN
         self._lock = asyncio.Lock()
 
     def is_stale(self, now: datetime) -> bool:
@@ -179,18 +186,15 @@ class FplEventCache:
 
         Every branch compares the cache age against a TTL, so the re-fetch rate
         is bounded by the shorter of the two TTLs no matter which signals fire.
-        An earlier form returned True outright on "a deadline has passed", which
-        held until FPL moved the flags some minutes later and pulled the ~3 MB
-        document on every cycle in between.
+        No branch may return True on a signal alone — "a deadline has passed"
+        stays true until FPL moves the flags some minutes later, which would
+        pull the ~3 MB document on every cycle in between.
         """
         if not self.events or self.fetched is None:
             # Nothing usable to serve, so a recent failure must not stop us
             # retrying — the cooldown below deliberately does not apply here.
             return True
-        if (
-            self.failed_at is not None
-            and now - self.failed_at < BOOTSTRAP_RETRY_COOLDOWN
-        ):
+        if self.failed_at is not None and now - self.failed_at < self.retry_after:
             return False
         age = now - self.fetched
         if gameweek_is_live(self.events, now):
@@ -215,11 +219,20 @@ class FplEventCache:
             _LOGGER.debug("Refreshing bootstrap-static event cache")
             try:
                 self.events = await client.async_get_events()
-            except FplError:
-                self.failed_at = now
+            except FplError as err:
+                # Stamped when the failure happened, not when the request
+                # started: a request that runs to the 30 s timeout would
+                # otherwise begin its cooldown half a minute in the past.
+                self.failed_at = dt_util.utcnow()
+                self.retry_after = (
+                    BOOTSTRAP_RATE_LIMIT_COOLDOWN
+                    if isinstance(err, FplRateLimitedError)
+                    else BOOTSTRAP_RETRY_COOLDOWN
+                )
                 raise
             self.fetched = now
             self.failed_at = None
+            self.retry_after = BOOTSTRAP_RETRY_COOLDOWN
             return self.events
 
 

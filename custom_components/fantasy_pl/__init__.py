@@ -93,12 +93,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: FplConfigEntry) -> bool
     """Unload a config entry, dropping the shared cache with the last one."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded and len(hass.config_entries.async_entries(DOMAIN)) <= 1:
-        # async_entries() counts *registered* entries, loaded or not — the one
-        # being unloaded is still listed, so <= 1 means it is the only entry
-        # this integration has. With a second manager configured the cache is
-        # simply never dropped, which is harmless: hass.data does not outlive
-        # hass. A reload (options change) does drop it, costing one extra
-        # bootstrap fetch on the way back up — rare enough not to be worth
-        # reference-counting.
+        # async_entries() counts *registered* entries, loaded or not, and the
+        # one being unloaded is still listed — so <= 1 means this is the only
+        # entry. With a second manager configured the cache is simply never
+        # dropped, which is harmless: hass.data does not outlive hass.
         hass.data.pop(DOMAIN, None)
     return unloaded

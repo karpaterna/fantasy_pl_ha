@@ -38,6 +38,24 @@ class FplConnectionError(FplError):
     """Raised when the API could not be reached."""
 
 
+class FplRateLimitedError(FplConnectionError):
+    """Raised on HTTP 429.
+
+    A subclass of ``FplConnectionError`` so every existing handler keeps
+    treating it as a retryable transport failure; callers that want to back off
+    further can single it out.
+    """
+
+
+class FplNotFoundError(FplError):
+    """Raised when a path returns 404.
+
+    Raised by the generic HTTP layer, which cannot know what was missing.
+    ``async_get_entry`` translates it into ``FplManagerNotFound``; on any other
+    endpoint a 404 stays generic rather than claiming a manager is gone.
+    """
+
+
 class FplManagerNotFound(FplError):
     """Raised when the configured manager (entry) ID does not exist."""
 
@@ -54,19 +72,22 @@ class FplClient:
         url = f"{API_BASE}/{path}"
         try:
             async with asyncio.timeout(REQUEST_TIMEOUT):
-                # The response MUST be a context manager: the 404 branch below
-                # raises before the body is read, and without `async with` that
-                # connection is never released back to the pool. FPL 404s during
-                # maintenance windows, so this is a recurring unattended path in
-                # Home Assistant's *shared* aiohttp session.
+                # The response MUST be a context manager: the status branches
+                # below raise before the body is read, and without `async with`
+                # that connection is never returned to the pool — which is Home
+                # Assistant's shared one.
                 async with self._session.get(url, headers=HEADERS) as response:
                     if response.status == 404:
-                        raise FplManagerNotFound(f"Not found: {url}")
+                        raise FplNotFoundError(f"Not found: {url}")
+                    if response.status == 429:
+                        raise FplRateLimitedError(f"Rate limited by {url}")
                     response.raise_for_status()
                     # FPL serves JSON as text/html on some edges, so skip the
                     # content-type check rather than trusting the header.
                     return await response.json(content_type=None)
-        except FplManagerNotFound:
+        except FplError:
+            # The status branches above raise our own errors; re-raise them
+            # rather than letting the aiohttp handlers below reword them.
             raise
         except ClientResponseError as err:
             raise FplConnectionError(f"HTTP {err.status} from {url}") from err
@@ -76,9 +97,22 @@ class FplClient:
             raise FplConnectionError(f"Invalid JSON from {url}: {err}") from err
 
     async def async_get_entry(self, manager_id: int) -> dict[str, Any]:
-        """Return the manager summary for ``manager_id``."""
-        data = await self._get(f"entry/{manager_id}/")
-        if not isinstance(data, dict) or "id" not in data:
+        """Return the manager summary for ``manager_id``.
+
+        The payload's own ``id`` is checked against the one that was asked for,
+        so a response for a different manager can never be published under this
+        config entry's sensors.
+        """
+        try:
+            data = await self._get(f"entry/{manager_id}/")
+        except FplNotFoundError as err:
+            raise FplManagerNotFound(f"No manager with ID {manager_id}") from err
+        entry_id = data.get("id") if isinstance(data, dict) else None
+        if (
+            not isinstance(entry_id, int)
+            or isinstance(entry_id, bool)
+            or entry_id != manager_id
+        ):
             raise FplManagerNotFound(f"Unexpected payload for manager {manager_id}")
         return data
 
@@ -91,7 +125,10 @@ class FplClient:
         """
         data = await self._get("bootstrap-static/")
         events = data.get("events") if isinstance(data, dict) else None
-        if not isinstance(events, list):
+        # An empty list is rejected, not accepted as a valid season with no
+        # gameweeks: the cache treats "no events" as stale, so caching an empty
+        # success would re-download the ~3 MB document on every poll cycle.
+        if not isinstance(events, list) or not events:
             raise FplConnectionError("bootstrap-static returned no event list")
         keep = (
             "id",
@@ -106,11 +143,18 @@ class FplClient:
             "is_next",
         )
         # `isinstance` guard: a non-dict element would raise AttributeError,
-        # which is outside the exception set the coordinator handles, so it
-        # would surface as an unhandled coordinator error rather than a
-        # retryable UpdateFailed.
-        return [
+        # which the coordinator does not handle, so it would surface as an
+        # unhandled error rather than a retryable UpdateFailed.
+        pruned = [
             {k: event.get(k) for k in keep}
             for event in events
             if isinstance(event, dict)
         ]
+        if not pruned:
+            raise FplConnectionError("bootstrap-static returned no usable events")
+        if len(pruned) != len(events):
+            _LOGGER.warning(
+                "Dropped %d malformed entries from the bootstrap-static event list",
+                len(events) - len(pruned),
+            )
+        return pruned
