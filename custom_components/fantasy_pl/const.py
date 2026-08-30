@@ -56,6 +56,24 @@ BOOTSTRAP_RETRY_COOLDOWN: Final = timedelta(minutes=10)
 # would cost more than the extra staleness.
 BOOTSTRAP_RATE_LIMIT_COOLDOWN: Final = timedelta(minutes=30)
 
+# Picks are per-manager and tiny, but they only exist once the deadline has
+# passed - before that FPL answers 404. Once the gameweek is data_checked they
+# can no longer move, so the only window that needs re-fetching is a live
+# gameweek, where an automatic substitution can hand the armband to the vice
+# captain.
+PICKS_LIVE_MAX_AGE: Final = timedelta(minutes=15)
+
+# After a failed picks fetch, wait this long before trying again, so an FPL
+# outage costs one attempt per cooldown rather than one per poll cycle. Same
+# rule as BOOTSTRAP_RETRY_COOLDOWN, and the same length.
+PICKS_RETRY_COOLDOWN: Final = timedelta(minutes=10)
+
+# A deadline is an instant, but CalendarEvent rejects end <= start, so the
+# calendar gives each one an hour. The length carries no meaning: HA's calendar
+# trigger takes an `offset`, so "two hours before the deadline" is expressed
+# there, not here.
+DEADLINE_EVENT_DURATION: Final = timedelta(hours=1)
+
 MANUFACTURER: Final = "Premier League"
 MODEL: Final = "FPL Manager"
 

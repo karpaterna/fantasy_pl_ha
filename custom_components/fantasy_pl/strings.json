@@ -46,6 +46,9 @@
     }
   },
   "entity": {
+    "calendar": {
+      "deadlines": { "name": "Deadlines" }
+    },
     "sensor": {
       "overall_points": { "name": "Overall points" },
       "overall_rank": { "name": "Overall rank" },
@@ -65,7 +68,9 @@
           "provisional": "Provisional",
           "final": "Final"
         }
-      }
+      },
+      "captain": { "name": "Captain" },
+      "active_chip": { "name": "Active chip" }
     }
   }
 }

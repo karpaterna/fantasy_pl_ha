@@ -38,9 +38,9 @@ def _client() -> FplClient:
 
 
 async def _with_payload(payload: Any) -> Any:
-    """Run async_get_events against a canned _get response."""
+    """Run async_get_bootstrap against a canned _get response, returning events."""
     with patch.object(FplClient, "_get", AsyncMock(return_value=payload)):
-        return await _client().async_get_events()
+        return (await _client().async_get_bootstrap()).events
 
 
 async def test_get_events_prunes_to_the_keep_list() -> None:
@@ -169,7 +169,7 @@ async def test_bootstrap_404_stays_generic(
     aioclient_mock.get(BOOTSTRAP_URL, status=404)
 
     with pytest.raises(FplNotFoundError) as caught:
-        await _http_client(hass).async_get_events()
+        await _http_client(hass).async_get_bootstrap()
     assert not isinstance(caught.value, FplManagerNotFound)
 
 
@@ -213,7 +213,8 @@ async def test_a_404_releases_the_connection(
     with pytest.raises(FplManagerNotFound):
         await client.async_get_entry(MANAGER_ID)
 
-    assert [event["id"] for event in await client.async_get_events()] == [1]
+    bootstrap = await client.async_get_bootstrap()
+    assert [event["id"] for event in bootstrap.events] == [1]
 
 
 async def test_get_events_over_http_prunes_the_payload(
@@ -228,9 +229,9 @@ async def test_get_events_over_http_prunes_the_payload(
         },
     )
 
-    events = await _http_client(hass).async_get_events()
+    bootstrap = await _http_client(hass).async_get_bootstrap()
 
-    assert events == [
+    assert bootstrap.events == [
         {
             "id": 1,
             "name": "Gameweek 1",
@@ -244,3 +245,83 @@ async def test_get_events_over_http_prunes_the_payload(
             "is_next": None,
         }
     ]
+
+
+async def test_bootstrap_keeps_a_player_name_map() -> None:
+    payload = {
+        "events": [
+            {"id": 1, "name": "Gameweek 1", "deadline_time": "2026-08-14T17:30:00Z"}
+        ],
+        "elements": [
+            {"id": 351, "web_name": "Haaland", "now_cost": 150},
+            {"id": 427, "web_name": "Salah"},
+        ],
+    }
+
+    with patch.object(FplClient, "_get", AsyncMock(return_value=payload)):
+        bootstrap = await _client().async_get_bootstrap()
+
+    assert bootstrap.players == {351: "Haaland", 427: "Salah"}
+    # Only the two keys are kept; `now_cost` and the rest of the ~3 MB document
+    # must not be retained.
+    assert [event["id"] for event in bootstrap.events] == [1]
+
+
+@pytest.mark.parametrize(
+    "elements",
+    [
+        None,
+        [],
+        "not-a-list",
+        [{"id": 1}],  # no web_name
+        [{"web_name": "Nameless"}],  # no id
+        [{"id": True, "web_name": "Boolean"}],  # bool is an int subclass
+        [{"id": 1, "web_name": ""}],  # empty name
+        ["not-a-dict"],
+    ],
+    ids=[
+        "missing",
+        "empty",
+        "wrong_type",
+        "no_web_name",
+        "no_id",
+        "bool_id",
+        "empty_name",
+        "non_dict_entry",
+    ],
+)
+async def test_a_broken_elements_array_yields_no_names_but_does_not_fail(
+    elements: Any,
+) -> None:
+    """`events` alone decides success - eleven sensors depend on it, two on names."""
+    payload = {
+        "events": [
+            {"id": 1, "name": "Gameweek 1", "deadline_time": "2026-08-14T17:30:00Z"}
+        ],
+        "elements": elements,
+    }
+
+    with patch.object(FplClient, "_get", AsyncMock(return_value=payload)):
+        bootstrap = await _client().async_get_bootstrap()
+
+    assert bootstrap.players == {}
+    assert len(bootstrap.events) == 1
+
+
+async def test_get_picks_returns_the_payload() -> None:
+    payload = {"active_chip": None, "picks": [{"element": 351, "is_captain": True}]}
+
+    with patch.object(FplClient, "_get", AsyncMock(return_value=payload)) as get:
+        picks = await _client().async_get_picks(1234567, 2)
+
+    assert picks == payload
+    get.assert_awaited_once_with("entry/1234567/event/2/picks/")
+
+
+@pytest.mark.parametrize("payload", [None, [], "picks", 3])
+async def test_get_picks_rejects_a_non_dict_payload(payload: Any) -> None:
+    with (
+        patch.object(FplClient, "_get", AsyncMock(return_value=payload)),
+        pytest.raises(FplConnectionError),
+    ):
+        await _client().async_get_picks(1234567, 2)

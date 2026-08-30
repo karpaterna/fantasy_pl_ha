@@ -11,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.fantasy_pl.api import FplBootstrap
 from custom_components.fantasy_pl.const import CONF_MANAGER_ID, DOMAIN
 
 MANAGER_ID = 1234567
@@ -104,6 +105,7 @@ def events_payload() -> list[dict[str, Any]]:
             "name": "Gameweek 1",
             "deadline_time": "2026-08-14T17:30:00Z",
             "average_entry_score": 50,
+            "highest_score": 102,
             "finished": True,
             "data_checked": True,
             "is_previous": True,
@@ -136,13 +138,51 @@ def events_payload() -> list[dict[str, Any]]:
 
 
 @pytest.fixture
+def players_payload() -> dict[int, str]:
+    """Return the `{element id: web_name}` map pruned from bootstrap-static."""
+    return {351: "Haaland", 427: "Salah", 5: "Saka"}
+
+
+@pytest.fixture
+def picks_payload() -> dict[str, Any]:
+    """Return an `entry/{id}/event/{gw}/picks/` response for gameweek 2."""
+    return {
+        "active_chip": None,
+        "automatic_subs": [],
+        "entry_history": {"event": 2, "points": 61, "points_on_bench": 4},
+        "picks": [
+            {
+                "element": 351,
+                "position": 11,
+                "multiplier": 2,
+                "is_captain": True,
+                "is_vice_captain": False,
+            },
+            {
+                "element": 427,
+                "position": 10,
+                "multiplier": 1,
+                "is_captain": False,
+                "is_vice_captain": True,
+            },
+        ],
+    }
+
+
+@pytest.fixture
 def mock_client(
-    entry_payload: dict[str, Any], events_payload: list[dict[str, Any]]
+    entry_payload: dict[str, Any],
+    events_payload: list[dict[str, Any]],
+    players_payload: dict[int, str],
+    picks_payload: dict[str, Any],
 ) -> Generator[AsyncMock]:
     """Patch FplClient everywhere it is constructed."""
     client = AsyncMock()
     client.async_get_entry.return_value = entry_payload
-    client.async_get_events.return_value = events_payload
+    client.async_get_bootstrap.return_value = FplBootstrap(
+        events_payload, players_payload
+    )
+    client.async_get_picks.return_value = picks_payload
     with (
         patch("custom_components.fantasy_pl.FplClient", return_value=client),
         patch(

@@ -1,6 +1,6 @@
 """Tests for the bootstrap cache and its TTL policy.
 
-`gameweek_is_live` and `FplEventCache.is_stale` are pure functions of their
+`gameweek_is_live` and `FplBootstrapCache.is_stale` are pure functions of their
 arguments, so most of this file needs no Home Assistant instance. That is
 deliberate: the TTL policy is the part of this integration most likely to
 regress silently, and it should be cheap to test.
@@ -14,14 +14,16 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.fantasy_pl.api import (
+    FplBootstrap,
     FplConnectionError,
     FplManagerNotFound,
+    FplNotFoundError,
     FplRateLimitedError,
 )
 from custom_components.fantasy_pl.const import (
@@ -32,7 +34,11 @@ from custom_components.fantasy_pl.const import (
     CONF_MANAGER_ID,
     DOMAIN,
 )
-from custom_components.fantasy_pl.coordinator import FplEventCache, gameweek_is_live
+from custom_components.fantasy_pl.coordinator import (
+    FplBootstrapCache,
+    FplDataUpdateCoordinator,
+    gameweek_is_live,
+)
 
 from .conftest import setup_entry
 
@@ -101,7 +107,7 @@ def test_gameweek_is_live(events: list[dict[str, Any]], expected: bool) -> None:
 )
 def test_is_stale_ttl(live: bool, age: timedelta, expected: bool) -> None:
     """The TTL is selected by whether a gameweek is being played."""
-    cache = FplEventCache()
+    cache = FplBootstrapCache()
     cache.events = [
         _gw("2026-08-29T14:00:00Z") if live else _gw("2026-09-05T17:30:00Z")
     ]
@@ -111,7 +117,7 @@ def test_is_stale_ttl(live: bool, age: timedelta, expected: bool) -> None:
 
 def test_is_stale_without_cache() -> None:
     """An empty cache is always stale."""
-    assert FplEventCache().is_stale(NOW) is True
+    assert FplBootstrapCache().is_stale(NOW) is True
 
 
 async def test_refetch_rate_is_bounded() -> None:
@@ -123,16 +129,18 @@ async def test_refetch_rate_is_bounded() -> None:
     for the whole of that window.
     """
     client = AsyncMock()
-    client.async_get_events.return_value = [_gw("2026-08-29T14:00:00Z")]
-    cache = FplEventCache()
+    client.async_get_bootstrap.return_value = FplBootstrap(
+        [_gw("2026-08-29T14:00:00Z")], {}
+    )
+    cache = FplBootstrapCache()
 
-    await cache.async_get_events(client)
-    assert client.async_get_events.await_count == 1
+    await cache.async_get_bootstrap(client)
+    assert client.async_get_bootstrap.await_count == 1
 
     # Simulate several poll cycles inside the live TTL.
     for _ in range(5):
-        await cache.async_get_events(client)
-    assert client.async_get_events.await_count == 1
+        await cache.async_get_bootstrap(client)
+    assert client.async_get_bootstrap.await_count == 1
 
 
 async def test_cache_is_shared_between_entries(
@@ -159,39 +167,39 @@ async def test_cache_is_shared_between_entries(
     await setup_entry(hass, second)
 
     assert mock_client.async_get_entry.await_count == 2
-    assert mock_client.async_get_events.await_count == 1
+    assert mock_client.async_get_bootstrap.await_count == 1
     assert mock_config_entry.runtime_data.cache is second.runtime_data.cache
 
 
 async def test_failed_fetch_serves_stale_cache_during_cooldown() -> None:
     """A failed bootstrap fetch must not be retried on every poll cycle."""
     client = AsyncMock()
-    client.async_get_events.side_effect = FplConnectionError("FPL is down")
-    cache = FplEventCache()
+    client.async_get_bootstrap.side_effect = FplConnectionError("FPL is down")
+    cache = FplBootstrapCache()
     cache.events = [_gw(NEVER_LIVE)]
     cache.fetched = dt_util.utcnow() - BOOTSTRAP_MAX_AGE
 
     # The first attempt is made, fails, and propagates so the caller can decide.
     with pytest.raises(FplConnectionError):
-        await cache.async_get_events(client)
-    assert client.async_get_events.await_count == 1
+        await cache.async_get_bootstrap(client)
+    assert client.async_get_bootstrap.await_count == 1
 
     # Subsequent cycles inside the cooldown serve the stale cache silently.
     for _ in range(5):
-        assert await cache.async_get_events(client) == cache.events
-    assert client.async_get_events.await_count == 1
+        assert (await cache.async_get_bootstrap(client)).events == cache.events
+    assert client.async_get_bootstrap.await_count == 1
 
 
 async def test_empty_cache_ignores_cooldown() -> None:
     """With nothing cached there is no degraded mode, so keep retrying."""
     client = AsyncMock()
-    client.async_get_events.side_effect = FplConnectionError("FPL is down")
-    cache = FplEventCache()
+    client.async_get_bootstrap.side_effect = FplConnectionError("FPL is down")
+    cache = FplBootstrapCache()
 
     for expected in (1, 2, 3):
         with pytest.raises(FplConnectionError):
-            await cache.async_get_events(client)
-        assert client.async_get_events.await_count == expected
+            await cache.async_get_bootstrap(client)
+        assert client.async_get_bootstrap.await_count == expected
 
 
 async def test_bootstrap_failure_does_not_fail_the_update(
@@ -208,7 +216,7 @@ async def test_bootstrap_failure_does_not_fail_the_update(
     # Expire the cache, then make the refetch fail.
     coordinator.cache.fetched = dt_util.utcnow() - BOOTSTRAP_MAX_AGE
     coordinator.cache.failed_at = None
-    mock_client.async_get_events.side_effect = FplConnectionError("FPL is down")
+    mock_client.async_get_bootstrap.side_effect = FplConnectionError("FPL is down")
 
     await coordinator.async_refresh()
 
@@ -271,22 +279,22 @@ async def test_concurrent_callers_share_one_download() -> None:
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def _slow_fetch() -> list[dict[str, Any]]:
+    async def _slow_fetch() -> FplBootstrap:
         started.set()
         await release.wait()
-        return [_gw(NEVER_LIVE)]
+        return FplBootstrap([_gw(NEVER_LIVE)], {})
 
     client = AsyncMock()
-    client.async_get_events.side_effect = _slow_fetch
-    cache = FplEventCache()
+    client.async_get_bootstrap.side_effect = _slow_fetch
+    cache = FplBootstrapCache()
 
-    callers = [asyncio.create_task(cache.async_get_events(client)) for _ in range(5)]
+    callers = [asyncio.create_task(cache.async_get_bootstrap(client)) for _ in range(5)]
     # One caller is now inside the fetch and the other four are on the lock.
     await started.wait()
     release.set()
     results = await asyncio.gather(*callers)
 
-    assert client.async_get_events.await_count == 1
+    assert client.async_get_bootstrap.await_count == 1
     assert all(result == results[0] for result in results)
 
 
@@ -297,8 +305,8 @@ async def test_failure_cooldown_starts_at_the_failure_not_the_request() -> None:
     time back, shortening the quiet period by however slow FPL was being.
     """
     client = AsyncMock()
-    client.async_get_events.side_effect = FplConnectionError("FPL is down")
-    cache = FplEventCache()
+    client.async_get_bootstrap.side_effect = FplConnectionError("FPL is down")
+    cache = FplBootstrapCache()
     cache.events = [_gw(NEVER_LIVE)]
     cache.fetched = NOW - BOOTSTRAP_MAX_AGE
     failed_at = NOW + timedelta(seconds=30)
@@ -310,7 +318,7 @@ async def test_failure_cooldown_starts_at_the_failure_not_the_request() -> None:
         ),
         pytest.raises(FplConnectionError),
     ):
-        await cache.async_get_events(client)
+        await cache.async_get_bootstrap(client)
 
     assert cache.failed_at == failed_at
 
@@ -318,8 +326,8 @@ async def test_failure_cooldown_starts_at_the_failure_not_the_request() -> None:
 async def test_rate_limiting_earns_a_longer_cooldown() -> None:
     """A 429 is FPL asking for less traffic, so back off further than usual."""
     client = AsyncMock()
-    client.async_get_events.side_effect = FplRateLimitedError("429")
-    cache = FplEventCache()
+    client.async_get_bootstrap.side_effect = FplRateLimitedError("429")
+    cache = FplBootstrapCache()
     cache.events = [_gw(NEVER_LIVE)]
     cache.fetched = NOW - BOOTSTRAP_MAX_AGE
 
@@ -330,7 +338,7 @@ async def test_rate_limiting_earns_a_longer_cooldown() -> None:
         ),
         pytest.raises(FplRateLimitedError),
     ):
-        await cache.async_get_events(client)
+        await cache.async_get_bootstrap(client)
 
     assert cache.retry_after == BOOTSTRAP_RATE_LIMIT_COOLDOWN
     # Still quiet at the point an ordinary failure would already have retried.
@@ -342,12 +350,12 @@ async def test_rate_limiting_earns_a_longer_cooldown() -> None:
 async def test_a_successful_fetch_clears_the_rate_limit_cooldown() -> None:
     """The longer cooldown must not outlive the rate limiting that caused it."""
     client = AsyncMock()
-    client.async_get_events.return_value = [_gw(NEVER_LIVE)]
-    cache = FplEventCache()
+    client.async_get_bootstrap.return_value = FplBootstrap([_gw(NEVER_LIVE)], {})
+    cache = FplBootstrapCache()
     cache.retry_after = BOOTSTRAP_RATE_LIMIT_COOLDOWN
     cache.failed_at = NOW
 
-    await cache.async_get_events(client)
+    await cache.async_get_bootstrap(client)
 
     assert cache.failed_at is None
     assert cache.retry_after == BOOTSTRAP_RETRY_COOLDOWN
@@ -385,7 +393,88 @@ async def test_a_bootstrap_failure_with_nothing_cached_fails_the_update(
     coordinator.cache.events = []
     coordinator.cache.fetched = None
     coordinator.cache.failed_at = None
-    mock_client.async_get_events.side_effect = FplConnectionError("FPL is down")
+    mock_client.async_get_bootstrap.side_effect = FplConnectionError("FPL is down")
     await coordinator.async_refresh()
 
     assert coordinator.last_update_success is False
+
+
+def _coordinator(hass: HomeAssistant, client: AsyncMock) -> FplDataUpdateCoordinator:
+    """Build a coordinator with no config entry setup, for policy tests."""
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_MANAGER_ID: 1234567})
+    entry.add_to_hass(hass)
+    return FplDataUpdateCoordinator(hass, entry, client, 1234567, FplBootstrapCache())
+
+
+@pytest.mark.parametrize(
+    ("event", "held_event", "fetched_age", "failed_age", "expected"),
+    [
+        (_gw("2099-01-01T00:00:00Z", id=2), None, None, None, False),
+        (_gw("2026-08-28T17:30:00Z", id=2), None, None, None, True),
+        (_gw("2026-08-28T17:30:00Z", id=2), 1, timedelta(minutes=1), None, True),
+        (_gw("2026-08-28T17:30:00Z", id=2), 2, timedelta(minutes=1), None, False),
+        (_gw("2026-08-28T17:30:00Z", id=2), 2, timedelta(minutes=20), None, True),
+        (_gw("2026-08-28T17:30:00Z", True, id=2), 2, timedelta(days=3), None, False),
+        (_gw("2026-08-28T17:30:00Z", id=2), None, None, timedelta(minutes=2), False),
+        (_gw("2026-08-28T17:30:00Z", id=2), None, None, timedelta(minutes=30), True),
+        (_gw("not-a-date", id=2), None, None, None, False),
+    ],
+    ids=[
+        "deadline_not_passed",
+        "nothing_held",
+        "held_for_another_gameweek",
+        "fresh_enough",
+        "stale_while_live",
+        "gameweek_settled",
+        "inside_failure_cooldown",
+        "cooldown_expired",
+        "unparsable_deadline",
+    ],
+)
+async def test_picks_staleness(
+    hass: HomeAssistant,
+    event: dict[str, Any],
+    held_event: int | None,
+    fetched_age: timedelta | None,
+    failed_age: timedelta | None,
+    expected: bool,
+) -> None:
+    coordinator = _coordinator(hass, AsyncMock())
+    coordinator._picks_event = held_event
+    coordinator._picks_fetched = None if fetched_age is None else NOW - fetched_age
+    coordinator._picks_failed_at = None if failed_age is None else NOW - failed_age
+
+    assert coordinator._picks_are_stale(event, NOW) is expected
+
+
+async def test_a_picks_404_does_not_fail_the_update(
+    hass: HomeAssistant,
+    mock_config_entry: ConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """Before FPL publishes them a 404 is the expected answer, not a fault."""
+    mock_client.async_get_picks.side_effect = FplNotFoundError("not yet")
+
+    await setup_entry(hass, mock_config_entry)
+
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    assert hass.states.get("sensor.example_team_overall_points").state == "47"
+
+
+async def test_a_picks_failure_keeps_the_last_known_picks(
+    hass: HomeAssistant,
+    mock_config_entry: ConfigEntry,
+    mock_client: AsyncMock,
+    picks_payload: dict[str, Any],
+) -> None:
+    await setup_entry(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data
+    assert coordinator.data.picks == picks_payload
+
+    mock_client.async_get_picks.side_effect = FplConnectionError("down")
+    coordinator._picks_fetched = dt_util.utcnow() - timedelta(hours=1)
+    coordinator._picks_failed_at = None
+    await coordinator.async_refresh()
+
+    assert coordinator.last_update_success is True
+    assert coordinator.data.picks == picks_payload
