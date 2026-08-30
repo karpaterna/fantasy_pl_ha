@@ -10,7 +10,7 @@ FPL API — no login, no cookies, no credentials stored.
 
 ## Entities
 
-One manager creates one device with 11 sensors:
+One manager creates one device with 13 sensors and a calendar:
 
 | Entity | Example |
 | --- | --- |
@@ -25,6 +25,8 @@ One manager creates one device with 11 sensors:
 | Next deadline | `2026-08-29T17:30:00+00:00` |
 | Gameweek average score | `45 pts` |
 | Gameweek state | `scheduled` / `in_progress` / `provisional` / `final` |
+| Captain | `Haaland` |
+| Active chip | `3xc` / `wildcard` / `freehit` / `bboost` / `none` |
 
 Money sensors carry no unit deliberately — `£` would imply pounds rather than
 millions, and `m` is Home Assistant's symbol for metres.
@@ -54,6 +56,25 @@ document, refreshed every 15 minutes during a live gameweek and every 6 hours
 otherwise — so `provisional` → `final` can lag by up to 15 minutes. If FPL is
 unreachable the cached gameweek data keeps being served, so only those three
 sensors go stale.
+
+## Calendar
+
+The integration also creates a calendar entity with every gameweek deadline of
+the season, so you can put them on a dashboard or trigger on them:
+
+```yaml
+automation:
+  - alias: "FPL deadline warning"
+    triggers:
+      - trigger: calendar
+        entity_id: calendar.your_team_deadlines
+        event: start
+        offset: "-02:00:00"
+    actions:
+      - action: notify.mobile_app
+        data:
+          message: "FPL deadline in two hours."
+```
 
 ## Installation
 
