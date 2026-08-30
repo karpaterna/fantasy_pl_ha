@@ -306,3 +306,22 @@ async def test_a_broken_elements_array_yields_no_names_but_does_not_fail(
 
     assert bootstrap.players == {}
     assert len(bootstrap.events) == 1
+
+
+async def test_get_picks_returns_the_payload() -> None:
+    payload = {"active_chip": None, "picks": [{"element": 351, "is_captain": True}]}
+
+    with patch.object(FplClient, "_get", AsyncMock(return_value=payload)) as get:
+        picks = await _client().async_get_picks(1234567, 2)
+
+    assert picks == payload
+    get.assert_awaited_once_with("entry/1234567/event/2/picks/")
+
+
+@pytest.mark.parametrize("payload", [None, [], "picks", 3])
+async def test_get_picks_rejects_a_non_dict_payload(payload: Any) -> None:
+    with (
+        patch.object(FplClient, "_get", AsyncMock(return_value=payload)),
+        pytest.raises(FplConnectionError),
+    ):
+        await _client().async_get_picks(1234567, 2)

@@ -14,7 +14,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -23,6 +23,7 @@ from custom_components.fantasy_pl.api import (
     FplBootstrap,
     FplConnectionError,
     FplManagerNotFound,
+    FplNotFoundError,
     FplRateLimitedError,
 )
 from custom_components.fantasy_pl.const import (
@@ -35,6 +36,7 @@ from custom_components.fantasy_pl.const import (
 )
 from custom_components.fantasy_pl.coordinator import (
     FplBootstrapCache,
+    FplDataUpdateCoordinator,
     gameweek_is_live,
 )
 
@@ -395,3 +397,84 @@ async def test_a_bootstrap_failure_with_nothing_cached_fails_the_update(
     await coordinator.async_refresh()
 
     assert coordinator.last_update_success is False
+
+
+def _coordinator(hass: HomeAssistant, client: AsyncMock) -> FplDataUpdateCoordinator:
+    """Build a coordinator with no config entry setup, for policy tests."""
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_MANAGER_ID: 1234567})
+    entry.add_to_hass(hass)
+    return FplDataUpdateCoordinator(hass, entry, client, 1234567, FplBootstrapCache())
+
+
+@pytest.mark.parametrize(
+    ("event", "held_event", "fetched_age", "failed_age", "expected"),
+    [
+        (_gw("2099-01-01T00:00:00Z", id=2), None, None, None, False),
+        (_gw("2026-08-28T17:30:00Z", id=2), None, None, None, True),
+        (_gw("2026-08-28T17:30:00Z", id=2), 1, timedelta(minutes=1), None, True),
+        (_gw("2026-08-28T17:30:00Z", id=2), 2, timedelta(minutes=1), None, False),
+        (_gw("2026-08-28T17:30:00Z", id=2), 2, timedelta(minutes=20), None, True),
+        (_gw("2026-08-28T17:30:00Z", True, id=2), 2, timedelta(days=3), None, False),
+        (_gw("2026-08-28T17:30:00Z", id=2), None, None, timedelta(minutes=2), False),
+        (_gw("2026-08-28T17:30:00Z", id=2), None, None, timedelta(minutes=30), True),
+        (_gw("not-a-date", id=2), None, None, None, False),
+    ],
+    ids=[
+        "deadline_not_passed",
+        "nothing_held",
+        "held_for_another_gameweek",
+        "fresh_enough",
+        "stale_while_live",
+        "gameweek_settled",
+        "inside_failure_cooldown",
+        "cooldown_expired",
+        "unparsable_deadline",
+    ],
+)
+async def test_picks_staleness(
+    hass: HomeAssistant,
+    event: dict[str, Any],
+    held_event: int | None,
+    fetched_age: timedelta | None,
+    failed_age: timedelta | None,
+    expected: bool,
+) -> None:
+    coordinator = _coordinator(hass, AsyncMock())
+    coordinator._picks_event = held_event
+    coordinator._picks_fetched = None if fetched_age is None else NOW - fetched_age
+    coordinator._picks_failed_at = None if failed_age is None else NOW - failed_age
+
+    assert coordinator._picks_are_stale(event, NOW) is expected
+
+
+async def test_a_picks_404_does_not_fail_the_update(
+    hass: HomeAssistant,
+    mock_config_entry: ConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    """Before FPL publishes them a 404 is the expected answer, not a fault."""
+    mock_client.async_get_picks.side_effect = FplNotFoundError("not yet")
+
+    await setup_entry(hass, mock_config_entry)
+
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    assert hass.states.get("sensor.example_team_overall_points").state == "47"
+
+
+async def test_a_picks_failure_keeps_the_last_known_picks(
+    hass: HomeAssistant,
+    mock_config_entry: ConfigEntry,
+    mock_client: AsyncMock,
+    picks_payload: dict[str, Any],
+) -> None:
+    await setup_entry(hass, mock_config_entry)
+    coordinator = mock_config_entry.runtime_data
+    assert coordinator.data.picks == picks_payload
+
+    mock_client.async_get_picks.side_effect = FplConnectionError("down")
+    coordinator._picks_fetched = dt_util.utcnow() - timedelta(hours=1)
+    coordinator._picks_failed_at = None
+    await coordinator.async_refresh()
+
+    assert coordinator.last_update_success is True
+    assert coordinator.data.picks == picks_payload

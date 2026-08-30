@@ -20,6 +20,7 @@ from .api import (
     FplConnectionError,
     FplError,
     FplManagerNotFound,
+    FplNotFoundError,
     FplRateLimitedError,
 )
 from .const import (
@@ -31,6 +32,8 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     GAMEWEEK_LIVE_WINDOW,
+    PICKS_LIVE_MAX_AGE,
+    PICKS_RETRY_COOLDOWN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -129,6 +132,7 @@ class FplData:
     entry: dict[str, Any] = field(default_factory=dict)
     events: list[dict[str, Any]] = field(default_factory=list)
     players: dict[int, str] = field(default_factory=dict)
+    picks: dict[str, Any] | None = None
 
     @property
     def classic_leagues(self) -> list[dict[str, Any]]:
@@ -145,6 +149,33 @@ class FplData:
             ),
             None,
         )
+
+    def pick_with(self, flag: str) -> dict[str, Any] | None:
+        """Return the pick carrying ``flag`` (is_captain / is_vice_captain).
+
+        Guarded at every level: the payload is absent until a deadline passes,
+        and the API is unofficial, so a missing or wrong-typed key yields None
+        rather than raising inside a sensor's value function.
+        """
+        if not isinstance(self.picks, dict):
+            return None
+        picks = self.picks.get("picks")
+        if not isinstance(picks, list):
+            return None
+        return next(
+            (pick for pick in picks if isinstance(pick, dict) and pick.get(flag)),
+            None,
+        )
+
+    def player_name(self, element_id: object) -> str | None:
+        """Return a player's short name, or None when the map has no entry.
+
+        ``bool`` is excluded because it is a subclass of ``int``: True would
+        otherwise look up player 1.
+        """
+        if isinstance(element_id, bool) or not isinstance(element_id, int):
+            return None
+        return self.players.get(element_id)
 
     def event_by_flag(self, flag: str) -> dict[str, Any] | None:
         """Return the event marked with ``flag`` (is_current/is_next/...)."""
@@ -267,6 +298,12 @@ class FplDataUpdateCoordinator(DataUpdateCoordinator[FplData]):
         self.manager_id = manager_id
         self.cache = cache
         self._device_name: str | None = None
+        # Picks are per-manager, so they live here rather than in the shared
+        # bootstrap cache, which is game-wide.
+        self._picks: dict[str, Any] | None = None
+        self._picks_event: int | None = None
+        self._picks_fetched: datetime | None = None
+        self._picks_failed_at: datetime | None = None
 
     def _async_update_device_name(self, entry: dict[str, Any]) -> None:
         """Push a team rename through to the device registry.
@@ -293,6 +330,67 @@ class FplDataUpdateCoordinator(DataUpdateCoordinator[FplData]):
             identifiers={(DOMAIN, str(self.manager_id))},
             name=name,
         )
+
+    def _picks_are_stale(self, event: dict[str, Any], now: datetime) -> bool:
+        """Decide whether this gameweek's picks need (re-)fetching.
+
+        Pure function of its arguments and the coordinator's own cache stamps -
+        ``now`` is passed in, not read - so the policy is testable without
+        touching the network.
+
+        Every branch compares an age against a TTL, the same rule
+        ``FplBootstrapCache.is_stale`` follows: no branch may return True on a
+        signal alone, or a condition that stays true for hours would re-fetch on
+        every poll cycle.
+        """
+        deadline = dt_util.parse_datetime(event.get("deadline_time") or "")
+        if deadline is None or now < deadline:
+            # Not published yet; asking would earn a 404.
+            return False
+        if (
+            self._picks_failed_at is not None
+            and now - self._picks_failed_at < PICKS_RETRY_COOLDOWN
+        ):
+            return False
+        if self._picks_event != event.get("id") or self._picks_fetched is None:
+            return True
+        if event.get("data_checked"):
+            # The gameweek is settled: no substitution can move the armband now.
+            return False
+        return now - self._picks_fetched >= PICKS_LIVE_MAX_AGE
+
+    async def _async_refresh_picks(self, event: dict[str, Any] | None) -> None:
+        """Fetch the current gameweek's picks when due; never fail the update.
+
+        Isolated exactly like the bootstrap fetch: eleven of the thirteen
+        sensors do not read picks, so a picks failure must not take them down.
+        The previously held picks are kept, which is also what carries the last
+        gameweek's captain through the days between a gameweek settling and the
+        next deadline.
+        """
+        if event is None:
+            return
+        event_id = event.get("id")
+        if not isinstance(event_id, int) or isinstance(event_id, bool):
+            return
+        now = dt_util.utcnow()
+        if not self._picks_are_stale(event, now):
+            return
+        try:
+            picks = await self.client.async_get_picks(self.manager_id, event_id)
+        except FplNotFoundError:
+            # The expected answer in the minutes around a deadline, not a fault.
+            self._picks_failed_at = now
+            _LOGGER.debug("Picks for gameweek %s are not published yet", event_id)
+            return
+        except FplError as err:
+            self._picks_failed_at = now
+            _LOGGER.warning("Keeping the last known picks; fetch failed: %s", err)
+            return
+        self._picks = picks
+        self._picks_event = event_id
+        self._picks_fetched = now
+        self._picks_failed_at = None
 
     async def _async_update_data(self) -> FplData:
         """Fetch the manager summary, and the event list when it is stale.
@@ -330,4 +428,9 @@ class FplDataUpdateCoordinator(DataUpdateCoordinator[FplData]):
             )
 
         self._async_update_device_name(entry)
-        return FplData(entry=entry, events=bootstrap.events, players=bootstrap.players)
+        data = FplData(entry=entry, events=bootstrap.events, players=bootstrap.players)
+        # Built before the picks fetch because choosing which gameweek to ask
+        # for needs `current_event`, which is a property of the snapshot.
+        await self._async_refresh_picks(data.current_event)
+        data.picks = self._picks
+        return data

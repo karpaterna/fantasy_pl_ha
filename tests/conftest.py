@@ -144,10 +144,37 @@ def players_payload() -> dict[int, str]:
 
 
 @pytest.fixture
+def picks_payload() -> dict[str, Any]:
+    """Return an `entry/{id}/event/{gw}/picks/` response for gameweek 2."""
+    return {
+        "active_chip": None,
+        "automatic_subs": [],
+        "entry_history": {"event": 2, "points": 61, "points_on_bench": 4},
+        "picks": [
+            {
+                "element": 351,
+                "position": 11,
+                "multiplier": 2,
+                "is_captain": True,
+                "is_vice_captain": False,
+            },
+            {
+                "element": 427,
+                "position": 10,
+                "multiplier": 1,
+                "is_captain": False,
+                "is_vice_captain": True,
+            },
+        ],
+    }
+
+
+@pytest.fixture
 def mock_client(
     entry_payload: dict[str, Any],
     events_payload: list[dict[str, Any]],
     players_payload: dict[int, str],
+    picks_payload: dict[str, Any],
 ) -> Generator[AsyncMock]:
     """Patch FplClient everywhere it is constructed."""
     client = AsyncMock()
@@ -155,6 +182,7 @@ def mock_client(
     client.async_get_bootstrap.return_value = FplBootstrap(
         events_payload, players_payload
     )
+    client.async_get_picks.return_value = picks_payload
     with (
         patch("custom_components.fantasy_pl.FplClient", return_value=client),
         patch(

@@ -156,6 +156,20 @@ class FplClient:
             raise FplManagerNotFound(f"Unexpected payload for manager {manager_id}")
         return data
 
+    async def async_get_picks(self, manager_id: int, event_id: int) -> dict[str, Any]:
+        """Return the manager's team for one gameweek.
+
+        Public only once that gameweek's deadline has passed; before it FPL
+        answers 404. The caller treats that as "not published yet" rather than
+        an error, so no translation happens here.
+        """
+        data = await self._get(f"entry/{manager_id}/event/{event_id}/picks/")
+        if not isinstance(data, dict):
+            raise FplConnectionError(
+                f"Unexpected picks payload for manager {manager_id}"
+            )
+        return data
+
     async def async_get_bootstrap(self) -> FplBootstrap:
         """Return the gameweek (event) list and player-name map from bootstrap-static.
 
