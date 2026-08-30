@@ -28,6 +28,9 @@ from custom_components.fantasy_pl.sensor import (
     GW_STATE_IN_PROGRESS,
     GW_STATE_PROVISIONAL,
     GW_STATE_SCHEDULED,
+    _active_chip,
+    _captain_attributes,
+    _captain_name,
     _entry_int,
     _event_average_score,
     _gameweek_state,
@@ -261,3 +264,89 @@ async def test_sensors_go_unavailable_when_the_manager_fetch_fails(
     await hass.async_block_till_done()
 
     assert hass.states.get(entity_id).state == "unavailable"
+
+
+def _data(picks: dict[str, Any] | None) -> FplData:
+    return FplData(
+        entry={"current_event": 2},
+        events=[],
+        players={351: "Haaland", 427: "Salah"},
+        picks=picks,
+    )
+
+
+def test_captain_reads_the_name_out_of_the_player_map(
+    picks_payload: dict[str, Any],
+) -> None:
+    assert _captain_name(_data(picks_payload)) == "Haaland"
+
+
+def test_captain_attributes(picks_payload: dict[str, Any]) -> None:
+    assert _captain_attributes(_data(picks_payload)) == {
+        "vice_captain": "Salah",
+        "multiplier": 2,
+        "player_id": 351,
+        "gameweek": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    "picks",
+    [None, {}, {"picks": "not-a-list"}, {"picks": []}, {"picks": ["junk"]}],
+    ids=["none", "empty", "wrong_type", "no_picks", "non_dict_pick"],
+)
+def test_captain_without_usable_picks(picks: Any) -> None:
+    assert _captain_name(_data(picks)) is None
+    assert _captain_attributes(_data(picks)) is None
+
+
+def test_a_captain_missing_from_the_player_map_has_no_name() -> None:
+    """A name map that failed to prune must not crash the sensor."""
+    picks = {"picks": [{"element": 999, "multiplier": 2, "is_captain": True}]}
+
+    assert _captain_name(_data(picks)) is None
+    assert _captain_attributes(_data(picks))["player_id"] == 999
+
+
+def test_captain_attributes_without_a_vice_captain() -> None:
+    picks = {"picks": [{"element": 351, "multiplier": 3, "is_captain": True}]}
+
+    attributes = _captain_attributes(_data(picks))
+    assert attributes["vice_captain"] is None
+    assert attributes["multiplier"] == 3
+    assert attributes["gameweek"] is None
+
+
+@pytest.mark.parametrize(
+    ("picks", "expected"),
+    [
+        ({"active_chip": "3xc"}, "3xc"),
+        ({"active_chip": None}, "none"),
+        ({"active_chip": ""}, "none"),
+        ({"active_chip": 7}, "none"),
+        ({}, "none"),
+        # A chip FPL has not invented yet must publish, not vanish: this sensor
+        # is deliberately not an ENUM.
+        ({"active_chip": "assistant_manager"}, "assistant_manager"),
+        (None, None),
+    ],
+    ids=["chip", "null", "empty", "wrong_type", "missing", "unknown_chip", "no_picks"],
+)
+def test_active_chip(picks: Any, expected: str | None) -> None:
+    assert _active_chip(_data(picks)) == expected
+
+
+async def test_the_new_sensors_are_registered(
+    hass: HomeAssistant,
+    mock_config_entry: ConfigEntry,
+    mock_client: AsyncMock,
+) -> None:
+    await setup_entry(hass, mock_config_entry)
+    registry = er.async_get(hass)
+
+    for key in ("captain", "active_chip"):
+        entity_id = registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{MANAGER_ID}_{key}"
+        )
+        assert entity_id is not None, key
+        assert hass.states.get(entity_id).state != "unavailable"

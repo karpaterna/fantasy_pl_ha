@@ -13,7 +13,9 @@
       "total_transfers": { "default": "mdi:swap-horizontal" },
       "current_gameweek": { "default": "mdi:calendar-week" },
       "next_deadline": { "default": "mdi:clock-alert-outline" },
-      "gameweek_average_score": { "default": "mdi:chart-bell-curve" }
+      "gameweek_average_score": { "default": "mdi:chart-bell-curve" },
+      "captain": { "default": "mdi:account-star" },
+      "active_chip": { "default": "mdi:cards-playing-outline" }
     }
   }
 }

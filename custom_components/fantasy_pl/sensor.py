@@ -103,6 +103,60 @@ def _event_average_score(data: FplData) -> StateType:
     return _positive_int(event.get("average_entry_score"))
 
 
+CHIP_NONE = "none"
+
+
+def _picks_gameweek(data: FplData) -> int | None:
+    """Return the gameweek the held picks belong to."""
+    history = (data.picks or {}).get("entry_history")
+    if not isinstance(history, dict):
+        return None
+    return _positive_int(history.get("event"))
+
+
+def _captain_name(data: FplData) -> StateType:
+    """Return the captain's short name for the picks currently held.
+
+    Between a gameweek settling and the next deadline these are still the last
+    gameweek's picks - the `gameweek` attribute says which - because four days
+    of "unknown" answers a question the user can still ask.
+    """
+    pick = data.pick_with("is_captain")
+    if pick is None:
+        return None
+    return data.player_name(pick.get("element"))
+
+
+def _captain_attributes(data: FplData) -> dict[str, Any] | None:
+    """Return the context around the captain that needs no entity of its own."""
+    pick = data.pick_with("is_captain")
+    if pick is None:
+        return None
+    vice = data.pick_with("is_vice_captain")
+    return {
+        "vice_captain": data.player_name(vice.get("element")) if vice else None,
+        # 2 normally, 3 under the triple-captain chip, 0 when the captain did
+        # not play and was substituted out automatically.
+        "multiplier": _positive_int(pick.get("multiplier")),
+        "player_id": _positive_int(pick.get("element")),
+        "gameweek": _picks_gameweek(data),
+    }
+
+
+def _active_chip(data: FplData) -> StateType:
+    """Return the chip played this gameweek, or "none".
+
+    Deliberately NOT a SensorDeviceClass.ENUM. FPL has introduced new chips
+    mid-era, and a state outside a declared `options` list makes Home Assistant
+    log an error and drop it. A plain string absorbs a chip we have not heard
+    of. `gameweek_state` can be an enum because its four values are ours.
+    """
+    if not isinstance(data.picks, dict):
+        return None
+    chip = data.picks.get("active_chip")
+    return chip if isinstance(chip, str) and chip else CHIP_NONE
+
+
 def _league_movement(league: dict[str, Any]) -> int | None:
     """Return places gained since the last gameweek; positive means moved up.
 
@@ -124,6 +178,7 @@ class FplSensorEntityDescription(SensorEntityDescription):
     """Describes an FPL sensor and how to read its value."""
 
     value_fn: Callable[[FplData], StateType | datetime]
+    attrs_fn: Callable[[FplData], dict[str, Any] | None] | None = None
 
 
 SENSORS: tuple[FplSensorEntityDescription, ...] = (
@@ -208,6 +263,17 @@ SENSORS: tuple[FplSensorEntityDescription, ...] = (
         ],
         value_fn=_gameweek_state,
     ),
+    FplSensorEntityDescription(
+        key="captain",
+        translation_key="captain",
+        value_fn=_captain_name,
+        attrs_fn=_captain_attributes,
+    ),
+    FplSensorEntityDescription(
+        key="active_chip",
+        translation_key="active_chip",
+        value_fn=_active_chip,
+    ),
 )
 
 
@@ -255,6 +321,14 @@ class FplSensor(FplEntity, SensorEntity):
         if self.coordinator.data is None:
             return None
         return self.entity_description.value_fn(self.coordinator.data)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return the description's attributes, when it declares any."""
+        attrs_fn = self.entity_description.attrs_fn
+        if attrs_fn is None or self.coordinator.data is None:
+            return None
+        return attrs_fn(self.coordinator.data)
 
 
 class FplLeagueSensor(FplEntity, SensorEntity):

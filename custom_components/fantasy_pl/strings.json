@@ -68,7 +68,9 @@
           "provisional": "Provisional",
           "final": "Final"
         }
-      }
+      },
+      "captain": { "name": "Captain" },
+      "active_chip": { "name": "Active chip" }
     }
   }
 }
