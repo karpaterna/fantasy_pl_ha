@@ -11,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.fantasy_pl.api import FplBootstrap
 from custom_components.fantasy_pl.const import CONF_MANAGER_ID, DOMAIN
 
 MANAGER_ID = 1234567
@@ -137,13 +138,23 @@ def events_payload() -> list[dict[str, Any]]:
 
 
 @pytest.fixture
+def players_payload() -> dict[int, str]:
+    """Return the `{element id: web_name}` map pruned from bootstrap-static."""
+    return {351: "Haaland", 427: "Salah", 5: "Saka"}
+
+
+@pytest.fixture
 def mock_client(
-    entry_payload: dict[str, Any], events_payload: list[dict[str, Any]]
+    entry_payload: dict[str, Any],
+    events_payload: list[dict[str, Any]],
+    players_payload: dict[int, str],
 ) -> Generator[AsyncMock]:
     """Patch FplClient everywhere it is constructed."""
     client = AsyncMock()
     client.async_get_entry.return_value = entry_payload
-    client.async_get_events.return_value = events_payload
+    client.async_get_bootstrap.return_value = FplBootstrap(
+        events_payload, players_payload
+    )
     with (
         patch("custom_components.fantasy_pl.FplClient", return_value=client),
         patch(

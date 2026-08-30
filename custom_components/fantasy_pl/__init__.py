@@ -17,29 +17,29 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import (
+    FplBootstrapCache,
     FplConfigEntry,
     FplDataUpdateCoordinator,
-    FplEventCache,
     selected_league_ids,
 )
 
 PLATFORMS: list[Platform] = [Platform.CALENDAR, Platform.SENSOR]
 
 
-DATA_EVENT_CACHE = "event_cache"
+DATA_BOOTSTRAP_CACHE = "bootstrap_cache"
 
 
-def _shared_cache(hass: HomeAssistant) -> FplEventCache:
-    """Return the one event cache shared by every config entry.
+def _shared_cache(hass: HomeAssistant) -> FplBootstrapCache:
+    """Return the one bootstrap-static cache shared by every config entry.
 
     Stored under a key inside ``hass.data[DOMAIN]`` rather than *as*
     ``hass.data[DOMAIN]``, so a future platform can keep its own domain-level
     state without colliding with the cache.
     """
     domain_data = hass.data.setdefault(DOMAIN, {})
-    cache = domain_data.get(DATA_EVENT_CACHE)
+    cache = domain_data.get(DATA_BOOTSTRAP_CACHE)
     if cache is None:
-        cache = domain_data[DATA_EVENT_CACHE] = FplEventCache()
+        cache = domain_data[DATA_BOOTSTRAP_CACHE] = FplBootstrapCache()
     return cache
 
 

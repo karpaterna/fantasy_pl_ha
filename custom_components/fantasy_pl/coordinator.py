@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import (
+    FplBootstrap,
     FplClient,
     FplConnectionError,
     FplError,
@@ -127,6 +128,7 @@ class FplData:
 
     entry: dict[str, Any] = field(default_factory=dict)
     events: list[dict[str, Any]] = field(default_factory=list)
+    players: dict[int, str] = field(default_factory=dict)
 
     @property
     def classic_leagues(self) -> list[dict[str, Any]]:
@@ -164,8 +166,8 @@ class FplData:
         return self.event_by_flag("is_next")
 
 
-class FplEventCache:
-    """Instance-wide cache of the gameweek (event) list.
+class FplBootstrapCache:
+    """Instance-wide cache of the bootstrap-static slices.
 
     ``bootstrap-static/`` is game-wide: identical for every manager. One cache
     is therefore shared by every config entry rather than held per coordinator,
@@ -176,6 +178,7 @@ class FplEventCache:
     def __init__(self) -> None:
         """Initialise an empty cache."""
         self.events: list[dict[str, Any]] = []
+        self.players: dict[int, str] = {}
         self.fetched: datetime | None = None
         self.failed_at: datetime | None = None
         self.retry_after: timedelta = BOOTSTRAP_RETRY_COOLDOWN
@@ -201,8 +204,8 @@ class FplEventCache:
             return age >= BOOTSTRAP_LIVE_MAX_AGE
         return age >= BOOTSTRAP_MAX_AGE
 
-    async def async_get_events(self, client: FplClient) -> list[dict[str, Any]]:
-        """Return the event list, re-fetching only when the TTL says so.
+    async def async_get_bootstrap(self, client: FplClient) -> FplBootstrap:
+        """Return the bootstrap slices, re-fetching only when the TTL says so.
 
         The lock makes a concurrent refresh from a second config entry wait and
         then observe the fresh cache, rather than issuing a second download.
@@ -215,10 +218,10 @@ class FplEventCache:
         async with self._lock:
             now = dt_util.utcnow()
             if not self.is_stale(now):
-                return self.events
-            _LOGGER.debug("Refreshing bootstrap-static event cache")
+                return FplBootstrap(self.events, self.players)
+            _LOGGER.debug("Refreshing the bootstrap-static cache")
             try:
-                self.events = await client.async_get_events()
+                bootstrap = await client.async_get_bootstrap()
             except FplError as err:
                 # Stamped when the failure happened, not when the request
                 # started: a request that runs to the 30 s timeout would
@@ -230,10 +233,12 @@ class FplEventCache:
                     else BOOTSTRAP_RETRY_COOLDOWN
                 )
                 raise
+            self.events = bootstrap.events
+            self.players = bootstrap.players
             self.fetched = now
             self.failed_at = None
             self.retry_after = BOOTSTRAP_RETRY_COOLDOWN
-            return self.events
+            return bootstrap
 
 
 class FplDataUpdateCoordinator(DataUpdateCoordinator[FplData]):
@@ -247,7 +252,7 @@ class FplDataUpdateCoordinator(DataUpdateCoordinator[FplData]):
         config_entry: FplConfigEntry,
         client: FplClient,
         manager_id: int,
-        cache: FplEventCache,
+        cache: FplBootstrapCache,
         update_interval: timedelta = DEFAULT_SCAN_INTERVAL,
     ) -> None:
         """Initialise the coordinator."""
@@ -299,8 +304,8 @@ class FplDataUpdateCoordinator(DataUpdateCoordinator[FplData]):
         succeeds — only the three event-derived sensors go stale, and they hold
         their previous values rather than going unavailable.
 
-        ``async_get_events`` performs no I/O while the cache is fresh, so on most
-        cycles this is still a single request.
+        ``async_get_bootstrap`` performs no I/O while the cache is fresh, so on
+        most cycles this is still a single request.
         """
         try:
             entry = await self.client.async_get_entry(self.manager_id)
@@ -312,10 +317,10 @@ class FplDataUpdateCoordinator(DataUpdateCoordinator[FplData]):
             raise UpdateFailed(str(err)) from err
 
         try:
-            events = await self.cache.async_get_events(self.client)
+            bootstrap = await self.cache.async_get_bootstrap(self.client)
         except FplError as err:
-            events = self.cache.events
-            if not events:
+            bootstrap = FplBootstrap(self.cache.events, self.cache.players)
+            if not bootstrap.events:
                 # Nothing cached from a previous cycle, so there is no degraded
                 # mode to fall back to — three sensors would have no source.
                 raise UpdateFailed(f"No gameweek data available: {err}") from err
@@ -325,4 +330,4 @@ class FplDataUpdateCoordinator(DataUpdateCoordinator[FplData]):
             )
 
         self._async_update_device_name(entry)
-        return FplData(entry=entry, events=events)
+        return FplData(entry=entry, events=bootstrap.events, players=bootstrap.players)

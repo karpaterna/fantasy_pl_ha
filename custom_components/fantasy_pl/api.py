@@ -3,7 +3,7 @@
 Only public, unauthenticated endpoints are used:
 
 * ``entry/{manager_id}/``  - manager summary (small, polled every cycle)
-* ``bootstrap-static/``    - game-wide data incl. the gameweek (event) list
+* ``bootstrap-static/``    - the gameweek (event) list and a player-name map
                              (~3 MB, cached; see ``BOOTSTRAP_MAX_AGE``)
 """
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, NamedTuple
 
 from aiohttp import ClientError, ClientResponseError, ClientSession
 
@@ -58,6 +58,46 @@ class FplNotFoundError(FplError):
 
 class FplManagerNotFound(FplError):
     """Raised when the configured manager (entry) ID does not exist."""
+
+
+class FplBootstrap(NamedTuple):
+    """The two slices of bootstrap-static this integration keeps.
+
+    Both come out of one ~3 MB download. Everything else - teams, fixtures, the
+    per-player stat blocks - is discarded immediately.
+    """
+
+    events: list[dict[str, Any]]
+    players: dict[int, str]
+
+
+def _player_names(elements: object) -> dict[int, str]:
+    """Map element id to short name from the bootstrap `elements` array.
+
+    Roughly 700 entries, ~30 KB, against the 3 MB thrown away. Anything
+    malformed is skipped rather than raising: a broken `elements` array costs
+    two sensors their names, while `events` - which eleven sensors need - is
+    what decides whether the fetch succeeded.
+
+    `bool` is excluded explicitly because it is a subclass of `int`, so True
+    would otherwise register as player 1.
+    """
+    if not isinstance(elements, list):
+        return {}
+    names: dict[int, str] = {}
+    for element in elements:
+        if not isinstance(element, dict):
+            continue
+        player_id = element.get("id")
+        web_name = element.get("web_name")
+        if (
+            isinstance(player_id, int)
+            and not isinstance(player_id, bool)
+            and isinstance(web_name, str)
+            and web_name
+        ):
+            names[player_id] = web_name
+    return names
 
 
 class FplClient:
@@ -116,12 +156,13 @@ class FplClient:
             raise FplManagerNotFound(f"Unexpected payload for manager {manager_id}")
         return data
 
-    async def async_get_events(self) -> list[dict[str, Any]]:
-        """Return the gameweek (event) list from bootstrap-static.
+    async def async_get_bootstrap(self) -> FplBootstrap:
+        """Return the gameweek (event) list and player-name map from bootstrap-static.
 
-        Only the ``events`` key is kept; the rest of the ~3 MB document
-        (players, teams, stats) is discarded immediately so nothing large is
-        retained between updates.
+        Only the ``events`` key and a name map pruned from ``elements`` are
+        kept; the rest of the ~3 MB document (teams, fixtures, per-player stat
+        blocks) is discarded immediately so nothing large is retained between
+        updates.
         """
         data = await self._get("bootstrap-static/")
         events = data.get("events") if isinstance(data, dict) else None
@@ -157,4 +198,10 @@ class FplClient:
                 "Dropped %d malformed entries from the bootstrap-static event list",
                 len(events) - len(pruned),
             )
-        return pruned
+        players = _player_names(data.get("elements"))
+        if not players:
+            _LOGGER.warning(
+                "bootstrap-static carried no usable player names; "
+                "the captain sensor will show no name this cycle"
+            )
+        return FplBootstrap(pruned, players)
