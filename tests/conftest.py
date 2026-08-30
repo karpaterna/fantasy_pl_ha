@@ -104,6 +104,7 @@ def events_payload() -> list[dict[str, Any]]:
             "name": "Gameweek 1",
             "deadline_time": "2026-08-14T17:30:00Z",
             "average_entry_score": 50,
+            "highest_score": 102,
             "finished": True,
             "data_checked": True,
             "is_previous": True,

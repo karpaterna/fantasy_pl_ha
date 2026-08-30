@@ -23,7 +23,7 @@ from .coordinator import (
     selected_league_ids,
 )
 
-PLATFORMS: list[Platform] = [Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.CALENDAR, Platform.SENSOR]
 
 
 DATA_EVENT_CACHE = "event_cache"

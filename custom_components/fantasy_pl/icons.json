@@ -1,5 +1,8 @@
 {
   "entity": {
+    "calendar": {
+      "deadlines": { "default": "mdi:calendar-clock" }
+    },
     "sensor": {
       "overall_points": { "default": "mdi:counter" },
       "overall_rank": { "default": "mdi:podium" },

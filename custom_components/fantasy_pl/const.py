@@ -56,6 +56,12 @@ BOOTSTRAP_RETRY_COOLDOWN: Final = timedelta(minutes=10)
 # would cost more than the extra staleness.
 BOOTSTRAP_RATE_LIMIT_COOLDOWN: Final = timedelta(minutes=30)
 
+# A deadline is an instant, but CalendarEvent rejects end <= start, so the
+# calendar gives each one an hour. The length carries no meaning: HA's calendar
+# trigger takes an `offset`, so "two hours before the deadline" is expressed
+# there, not here.
+DEADLINE_EVENT_DURATION: Final = timedelta(hours=1)
+
 MANUFACTURER: Final = "Premier League"
 MODEL: Final = "FPL Manager"
 

@@ -46,6 +46,9 @@
     }
   },
   "entity": {
+    "calendar": {
+      "deadlines": { "name": "Deadlines" }
+    },
     "sensor": {
       "overall_points": { "name": "Overall points" },
       "overall_rank": { "name": "Overall rank" },
